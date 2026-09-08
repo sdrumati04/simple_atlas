@@ -13,7 +13,7 @@ import java.util.SequencedSet;
 
 public final class AtlasContents {
     public static final int HARD_MAX_ATLAS_MAP_COUNT = SimpleAtlasConfig.MAX_ATLAS_MAP_COUNT;
-    public static final AtlasContents EMPTY = new AtlasContents(List.of(), List.of(), 0, 1, 0);
+    public static final AtlasContents EMPTY = new AtlasContents(List.of(), List.of(), 0, 1, 0, List.of());
     public static final String DEFAULT_DIMENSION = "minecraft:overworld";
 
     private static final int MAX_WAYPOINT_NAME_LENGTH = 32;
@@ -49,12 +49,16 @@ public final class AtlasContents {
                     Codec.INT.optionalFieldOf("next_waypoint_number", 1)
                             .forGetter(AtlasContents::nextWaypointNumber),
                     Codec.INT.optionalFieldOf("blank_map_count", 0)
-                            .forGetter(AtlasContents::blankMapCount)
+                            .forGetter(AtlasContents::blankMapCount),
+                    Codec.INT.listOf()
+                            .optionalFieldOf("sub_map_ids", List.of())
+                            .forGetter(AtlasContents::subMapIds)
             ).apply(instance, AtlasContents::new)
     );
 
     // LinkedHashSet: O(1) contains() + insertion-order iteration
     private final SequencedSet<Integer> mapIdSet;
+    private final SequencedSet<Integer> subMapIdSet;
     private final List<WaypointData> waypoints;
     private final int selectedWaypointIconIndex;
     private final int nextWaypointNumber;
@@ -67,7 +71,19 @@ public final class AtlasContents {
             int nextWaypointNumber,
             int blankMapCount
     ) {
+        this(mapIds, waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, List.of());
+    }
+
+    public AtlasContents(
+            List<Integer> mapIds,
+            List<WaypointData> waypoints,
+            int selectedWaypointIconIndex,
+            int nextWaypointNumber,
+            int blankMapCount,
+            List<Integer> subMapIds
+    ) {
         this.mapIdSet = cappedMapIdSet(mapIds);
+        this.subMapIdSet = cappedMapIdSet(subMapIds);
         this.waypoints = List.copyOf(waypoints);
         this.selectedWaypointIconIndex = Math.max(0, selectedWaypointIconIndex);
         this.nextWaypointNumber = Math.max(1, nextWaypointNumber);
@@ -78,6 +94,16 @@ public final class AtlasContents {
     /** Returns map IDs in insertion order. */
     public List<Integer> mapIds() {
         return List.copyOf(mapIdSet);
+    }
+
+    public List<Integer> subMapIds() {
+        return List.copyOf(subMapIdSet);
+    }
+
+    public List<Integer> allMapIds() {
+        LinkedHashSet<Integer> all = new LinkedHashSet<>(mapIdSet);
+        all.addAll(subMapIdSet);
+        return List.copyOf(all);
     }
 
     public List<WaypointData> waypoints() {
@@ -100,6 +126,10 @@ public final class AtlasContents {
         return mapIdSet.contains(mapId);
     }
 
+    public boolean containsSubMap(int mapId) {
+        return subMapIdSet.contains(mapId);
+    }
+
     public AtlasContents withAdded(int mapId) {
         if (contains(mapId) || mapIdSet.size() >= configuredMapLimit()) {
             return this;
@@ -107,11 +137,15 @@ public final class AtlasContents {
 
         LinkedHashSet<Integer> updated = new LinkedHashSet<>(mapIdSet);
         updated.add(mapId);
-        return new AtlasContents(List.copyOf(updated), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount);
+        return new AtlasContents(List.copyOf(updated), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, subMapIds());
+    }
+
+    public AtlasContents withSubMaps(List<Integer> subMapIds) {
+        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, subMapIds);
     }
 
     public AtlasContents withWaypointState(List<WaypointData> waypoints, int selectedWaypointIconIndex, int nextWaypointNumber) {
-        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount);
+        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, subMapIds());
     }
 
     public boolean canAddMapId() {
@@ -169,6 +203,7 @@ public final class AtlasContents {
         if (this == o) return true;
         if (!(o instanceof AtlasContents other)) return false;
         return mapIdSet.equals(other.mapIdSet)
+                && subMapIdSet.equals(other.subMapIdSet)
                 && waypoints.equals(other.waypoints)
                 && selectedWaypointIconIndex == other.selectedWaypointIconIndex
                 && nextWaypointNumber == other.nextWaypointNumber;
@@ -176,11 +211,11 @@ public final class AtlasContents {
 
     @Override
     public int hashCode() {
-        return Objects.hash(mapIdSet, waypoints, selectedWaypointIconIndex, nextWaypointNumber);
+        return Objects.hash(mapIdSet, subMapIdSet, waypoints, selectedWaypointIconIndex, nextWaypointNumber);
     }
 
     @Override
     public String toString() {
-        return "AtlasContents{mapIds=" + mapIdSet + ", waypoints=" + waypoints.size() + "}";
+        return "AtlasContents{mapIds=" + mapIdSet + ", subMapIds=" + subMapIdSet + ", waypoints=" + waypoints.size() + "}";
     }
 }

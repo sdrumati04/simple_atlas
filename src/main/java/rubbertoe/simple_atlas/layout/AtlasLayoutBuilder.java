@@ -14,13 +14,17 @@ public final class AtlasLayoutBuilder {
     private AtlasLayoutBuilder() {}
 
     public static AtlasLayout build(ServerLevel level, AtlasContents contents) {
-        if (contents.mapIds().isEmpty()) {
+        return build(level, contents.mapIds());
+    }
+
+    public static AtlasLayout build(ServerLevel level, List<Integer> mapIds) {
+        if (mapIds.isEmpty()) {
             return emptyLayout();
         }
 
         List<ResolvedMap> resolved = new ArrayList<>();
 
-        for (int rawId : contents.mapIds()) {
+        for (int rawId : mapIds) {
             MapId mapId = new MapId(rawId);
             MapItemSavedData data = level.getMapData(mapId);
 
@@ -61,8 +65,8 @@ public final class AtlasLayoutBuilder {
             int dx = map.centerX() - origin.centerX();
             int dz = map.centerZ() - origin.centerZ();
 
-            int gridX = dx / mapSpan;
-            int gridZ = dz / mapSpan;
+            int gridX = Math.floorDiv(dx, mapSpan);
+            int gridZ = Math.floorDiv(dz, mapSpan);
 
             rawEntries.add(new RawEntry(
                     map.mapId(),

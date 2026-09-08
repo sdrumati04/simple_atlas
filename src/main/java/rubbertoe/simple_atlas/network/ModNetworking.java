@@ -315,6 +315,17 @@ public final class ModNetworking {
             }
         }
 
+        List<Integer> updatedSubMapIds = new ArrayList<>();
+        for (int subId : contents.subMapIds()) {
+            MapItemSavedData subData = player.level().getMapData(new MapId(subId));
+            if (subData != null && subData.dimension.equals(removedMapData.dimension)
+                    && Math.abs(subData.centerX - removedMapData.centerX) <= 64
+                    && Math.abs(subData.centerZ - removedMapData.centerZ) <= 64) {
+                continue;
+            }
+            updatedSubMapIds.add(subId);
+        }
+
         List<AtlasContents.WaypointData> filteredWaypoints = contents.waypoints().stream()
                 .filter(waypoint -> !isWaypointOnMap(waypoint, removedMapData))
                 .toList();
@@ -324,7 +335,8 @@ public final class ModNetworking {
                 filteredWaypoints,
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
-                0
+                0,
+                updatedSubMapIds
         );
     }
 

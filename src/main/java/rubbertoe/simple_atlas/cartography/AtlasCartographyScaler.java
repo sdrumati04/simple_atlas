@@ -7,10 +7,12 @@ import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 import org.jspecify.annotations.Nullable;
 import rubbertoe.simple_atlas.component.AtlasContents;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import rubbertoe.simple_atlas.compat.MapModCompat;
 
 public final class AtlasCartographyScaler {
     private static final int MAP_SIZE = 128;
@@ -56,13 +58,229 @@ public final class AtlasCartographyScaler {
             scaledMapIds.add(newId.id());
         }
 
-        return new AtlasContents(
+        List<Integer> subMapIds = new java.util.ArrayList<>();
+        MapItemSavedData firstOriginal = level.getMapData(new MapId(contents.mapIds().getFirst()));
+        if (firstOriginal != null && firstOriginal.scale == 0) {
+            subMapIds.addAll(contents.mapIds());
+        }
+
+        AtlasContents scaledContents = new AtlasContents(
                 List.copyOf(scaledMapIds),
                 contents.waypoints(),
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
-                0
+                0,
+                subMapIds
         );
+        return ensureSubMaps(level, scaledContents);
+    }
+
+    public static void syncParentAndSubMap(MapItemSavedData parent, MapItemSavedData subMap, int quadrant) {
+        if (parent == null || subMap == null || parent.scale != 1 || subMap.scale != 0) {
+            return;
+        }
+
+        int parentStartX = (quadrant % 2 == 0) ? 0 : 64;
+        int parentStartZ = (quadrant < 2) ? 0 : 64;
+
+        ArrayList<Integer> parentRemapped = MapModCompat.getRemappedColors(parent);
+        ArrayList<Integer> subRemapped = MapModCompat.getRemappedColors(subMap);
+        boolean remappedActive = parentRemapped != null || subRemapped != null;
+
+        if (remappedActive && subRemapped == null) {
+            MapModCompat.setRemappedColor(subMap, 0, 0, 0);
+            subRemapped = MapModCompat.getRemappedColors(subMap);
+        }
+
+        boolean parentColorsChanged = false;
+        boolean subColorsChanged = false;
+
+        for (int py = 0; py < 64; py++) {
+            for (int px = 0; px < 64; px++) {
+                int pX = parentStartX + px;
+                int pZ = parentStartZ + py;
+                int pIdx = pX + pZ * 128;
+
+                byte pColor = parent.colors[pIdx];
+                int pRemapped = (parentRemapped != null && pIdx < parentRemapped.size()) ? parentRemapped.get(pIdx) : 0;
+
+                int subBaseX = px * 2;
+                int subBaseZ = py * 2;
+
+                for (int dy = 0; dy < 2; dy++) {
+                    for (int dx = 0; dx < 2; dx++) {
+                        int sX = subBaseX + dx;
+                        int sZ = subBaseZ + dy;
+                        int sIdx = sX + sZ * 128;
+
+                        byte sColor = subMap.colors[sIdx];
+                        int sRemapped = (subRemapped != null && sIdx < subRemapped.size()) ? subRemapped.get(sIdx) : 0;
+
+                        // 1. Parent -> SubMap
+                        if (pColor != 0 && sColor == 0) {
+                            subMap.colors[sIdx] = pColor;
+                            subColorsChanged = true;
+                        }
+                        if (pRemapped != 0 && sRemapped == 0 && subRemapped != null && sIdx < subRemapped.size()) {
+                            subRemapped.set(sIdx, pRemapped);
+                            subColorsChanged = true;
+                        }
+
+                        // 2. SubMap -> Parent
+                        if (sColor != 0 && parent.colors[pIdx] == 0) {
+                            parent.colors[pIdx] = sColor;
+                            parentColorsChanged = true;
+                        }
+                        if (sRemapped != 0 && (parentRemapped == null || pIdx >= parentRemapped.size() || parentRemapped.get(pIdx) == 0)) {
+                            if (parentRemapped == null) {
+                                MapModCompat.setRemappedColor(parent, 0, 0, 0);
+                                parentRemapped = MapModCompat.getRemappedColors(parent);
+                            }
+                            if (parentRemapped != null && pIdx < parentRemapped.size()) {
+                                parentRemapped.set(pIdx, sRemapped);
+                                parentColorsChanged = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (subColorsChanged) {
+            subMap.setColor(0, 0, subMap.colors[0]);
+            subMap.setColor(127, 127, subMap.colors[16383]);
+        }
+        if (parentColorsChanged) {
+            parent.setColor(0, 0, parent.colors[0]);
+            parent.setColor(127, 127, parent.colors[16383]);
+        }
+    }
+
+    public static void syncParentAndSubMaps(ServerLevel level, AtlasContents contents) {
+        if (contents.mapIds().isEmpty() || contents.subMapIds().isEmpty()) {
+            return;
+        }
+        int[] dxOffsets = {-64, 64, -64, 64};
+        int[] dzOffsets = {-64, -64, 64, 64};
+
+        for (int parentRawId : contents.mapIds()) {
+            MapItemSavedData parent = level.getMapData(new MapId(parentRawId));
+            if (parent == null || parent.scale != 1) {
+                continue;
+            }
+
+            for (int q = 0; q < 4; q++) {
+                int targetX = parent.centerX + dxOffsets[q];
+                int targetZ = parent.centerZ + dzOffsets[q];
+
+                for (int subRawId : contents.subMapIds()) {
+                    MapItemSavedData subData = level.getMapData(new MapId(subRawId));
+                    if (subData != null
+                            && subData.scale == 0
+                            && subData.dimension.equals(parent.dimension)
+                            && subData.centerX == targetX
+                            && subData.centerZ == targetZ) {
+                        syncParentAndSubMap(parent, subData, q);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    public static AtlasContents ensureSubMaps(ServerLevel level, AtlasContents contents) {
+        if (contents.mapIds().isEmpty()) {
+            return contents;
+        }
+
+        MapItemSavedData first = level.getMapData(new MapId(contents.mapIds().getFirst()));
+        if (first == null || first.scale != 1) {
+            return contents;
+        }
+
+        LinkedHashSet<Integer> resultSubMapIds = new LinkedHashSet<>();
+        boolean changed = false;
+
+        int[] dxOffsets = {-64, 64, -64, 64};
+        int[] dzOffsets = {-64, -64, 64, 64};
+
+        for (int parentRawId : contents.mapIds()) {
+            MapItemSavedData parent = level.getMapData(new MapId(parentRawId));
+            if (parent == null || parent.scale != 1) {
+                continue;
+            }
+
+            for (int q = 0; q < 4; q++) {
+                int targetX = parent.centerX + dxOffsets[q];
+                int targetZ = parent.centerZ + dzOffsets[q];
+
+                Integer matchingSubId = null;
+                MapItemSavedData matchingSubData = null;
+
+                for (int subRawId : contents.subMapIds()) {
+                    MapItemSavedData subData = level.getMapData(new MapId(subRawId));
+                    if (subData != null
+                            && subData.scale == 0
+                            && subData.dimension.equals(parent.dimension)
+                            && subData.centerX == targetX
+                            && subData.centerZ == targetZ) {
+                        matchingSubId = subRawId;
+                        matchingSubData = subData;
+                        break;
+                    }
+                }
+
+                if (matchingSubId == null) {
+                    MapId newSubId = level.getFreeMapId();
+                    matchingSubData = MapItemSavedData.createFresh(
+                            targetX,
+                            targetZ,
+                            (byte) 0,
+                            true,
+                            false,
+                            parent.dimension
+                    );
+                    level.setMapData(newSubId, matchingSubData);
+                    matchingSubId = newSubId.id();
+                    changed = true;
+                }
+
+                resultSubMapIds.add(matchingSubId);
+
+                // Synchronize colors between parent and submap
+                syncParentAndSubMap(parent, matchingSubData, q);
+            }
+        }
+
+        // Also preserve any existing submaps that belong to other valid finer maps
+        for (int subRawId : contents.subMapIds()) {
+            if (!resultSubMapIds.contains(subRawId)) {
+                MapItemSavedData subData = level.getMapData(new MapId(subRawId));
+                if (subData != null && subData.scale == 0) {
+                    boolean duplicateCoord = false;
+                    for (int existingId : resultSubMapIds) {
+                        MapItemSavedData existingData = level.getMapData(new MapId(existingId));
+                        if (existingData != null
+                                && existingData.dimension.equals(subData.dimension)
+                                && existingData.centerX == subData.centerX
+                                && existingData.centerZ == subData.centerZ) {
+                            duplicateCoord = true;
+                            break;
+                        }
+                    }
+                    if (!duplicateCoord) {
+                        resultSubMapIds.add(subRawId);
+                    } else {
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (changed || resultSubMapIds.size() != contents.subMapIds().size()) {
+            return contents.withSubMaps(List.copyOf(resultSubMapIds));
+        }
+        return contents;
     }
 
     private static boolean validateScaleInputs(ServerLevel level, AtlasContents contents) {
@@ -175,6 +393,11 @@ public final class AtlasCartographyScaler {
                     && existing.scale == originData.scale) {
                 projectKnownPixelsIntoScaledMap(finerData, existing);
                 // Do NOT apply jagged edge effect when merging a finer-scale map into an atlas tile
+                if (finerData.scale == 0 && !contents.subMapIds().contains(finerId.id())) {
+                    var newSubs = new java.util.LinkedHashSet<>(contents.subMapIds());
+                    newSubs.add(finerId.id());
+                    return contents.withSubMaps(List.copyOf(newSubs));
+                }
                 return contents; // map_ids unchanged; underlying tile data enriched
             }
         }
@@ -188,7 +411,13 @@ public final class AtlasCartographyScaler {
         // Do NOT apply jagged edge effect when merging a finer-scale map into an atlas tile
         MapId newId = level.getFreeMapId();
         level.setMapData(newId, atlasCell);
-        return contents.withAdded(newId.id());
+        AtlasContents updated = contents.withAdded(newId.id());
+        if (finerData.scale == 0 && !updated.subMapIds().contains(finerId.id())) {
+            var newSubs = new java.util.LinkedHashSet<>(updated.subMapIds());
+            newSubs.add(finerId.id());
+            updated = updated.withSubMaps(List.copyOf(newSubs));
+        }
+        return updated;
     }
 
     // ----- Shared pixel projection -----

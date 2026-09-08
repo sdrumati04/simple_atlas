@@ -103,12 +103,7 @@ public abstract class AtlasIcon {
             return null;
         }
 
-        MapItemSavedData firstData = minecraft.level.getMapData(new MapId(tiles.getFirst().mapId()));
-        if (firstData == null) {
-            return null;
-        }
-
-        int scaleFactor = 1 << firstData.scale;
+        int scaleFactor = 1 << tiles.getFirst().scale();
         double bestDistSq = Double.MAX_VALUE;
         AtlasTilePayload bestTile = null;
         float bestLocalX = 0.0f;
@@ -119,7 +114,13 @@ public abstract class AtlasIcon {
         float fallbackLocalX = 0.0f;
         float fallbackLocalY = 0.0f;
 
+        int minTileX = Integer.MAX_VALUE;
+        int minTileY = Integer.MAX_VALUE;
+
         for (AtlasTilePayload tile : tiles) {
+            minTileX = Math.min(minTileX, tile.tileX());
+            minTileY = Math.min(minTileY, tile.tileY());
+
             double tileWorldMinX = tile.centerX() - 64.0 * scaleFactor;
             double tileWorldMinZ = tile.centerZ() - 64.0 * scaleFactor;
 
@@ -165,8 +166,11 @@ public abstract class AtlasIcon {
             return null;
         }
 
-        float tileScreenX = mapOriginX + chosen.tileX() * scaledTileSize;
-        float tileScreenY = mapOriginY + chosen.tileY() * scaledTileSize;
+        float localTileX = chosen.tileX() - minTileX;
+        float localTileY = chosen.tileY() - minTileY;
+
+        float tileScreenX = mapOriginX + localTileX * scaledTileSize;
+        float tileScreenY = mapOriginY + localTileY * scaledTileSize;
 
         float screenX = tileScreenX + localX * (scaledTileSize / 128.0f);
         float screenY = tileScreenY + localY * (scaledTileSize / 128.0f);

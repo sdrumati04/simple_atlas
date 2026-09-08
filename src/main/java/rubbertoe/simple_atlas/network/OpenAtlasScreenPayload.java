@@ -25,14 +25,25 @@ public record OpenAtlasScreenPayload(
     public static final Type<OpenAtlasScreenPayload> TYPE = new Type<>(ID);
 
     public static final StreamCodec<RegistryFriendlyByteBuf, AtlasTilePayload> TILE_CODEC =
-            StreamCodec.composite(
-                    ByteBufCodecs.INT, AtlasTilePayload::mapId,
-                    ByteBufCodecs.INT, AtlasTilePayload::centerX,
-                    ByteBufCodecs.INT, AtlasTilePayload::centerZ,
-                    ByteBufCodecs.INT, AtlasTilePayload::tileX,
-                    ByteBufCodecs.INT, AtlasTilePayload::tileY,
-                    ByteBufCodecs.stringUtf8(256), AtlasTilePayload::dimension,
-                    AtlasTilePayload::new
+            StreamCodec.of(
+                    (buf, val) -> {
+                        buf.writeInt(val.mapId());
+                        buf.writeInt(val.centerX());
+                        buf.writeInt(val.centerZ());
+                        buf.writeInt(val.tileX());
+                        buf.writeInt(val.tileY());
+                        ByteBufCodecs.stringUtf8(256).encode(buf, val.dimension());
+                        buf.writeInt(val.scale());
+                    },
+                    buf -> new AtlasTilePayload(
+                            buf.readInt(),
+                            buf.readInt(),
+                            buf.readInt(),
+                            buf.readInt(),
+                            buf.readInt(),
+                            ByteBufCodecs.stringUtf8(256).decode(buf),
+                            buf.readInt()
+                    )
             );
 
     public static final StreamCodec<RegistryFriendlyByteBuf, AtlasContents.WaypointData> WAYPOINT_CODEC =

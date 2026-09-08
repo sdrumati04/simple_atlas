@@ -24,8 +24,11 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BannerBlockEntity;
 import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
+import net.minecraft.world.item.MapItem;
 import org.jspecify.annotations.NonNull;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Consumer;
 import rubbertoe.simple_atlas.advancement.ModCriteria;
 import rubbertoe.simple_atlas.config.SimpleAtlasConfigManager;
@@ -38,6 +41,8 @@ import rubbertoe.simple_atlas.network.AtlasTilePayload;
 import rubbertoe.simple_atlas.network.OpenAtlasScreenPayload;
 import rubbertoe.simple_atlas.map.AtlasMapSelector;
 import rubbertoe.simple_atlas.server.AtlasViewManager;
+import rubbertoe.simple_atlas.cartography.AtlasCartographyScaler;
+import rubbertoe.simple_atlas.compat.MapModCompat;
 
 public class AtlasItem extends Item {
     public AtlasItem(Properties properties) {
@@ -155,10 +160,16 @@ public class AtlasItem extends Item {
             return InteractionResult.SUCCESS;
         }
 
-        syncAtlasMapsToPlayer((ServerPlayer) player, serverLevel, contents);
-        AtlasViewManager.startViewing((ServerPlayer) player, contents.mapIds());
-        ServerPlayNetworking.send((ServerPlayer) player, createOpenPayload((ServerPlayer) player, serverLevel, contents));
+        // Ensure sub-maps exist for any scale 1 map
+        AtlasContents ensuredContents = AtlasCartographyScaler.ensureSubMaps(serverLevel, contents);
+        if (!ensuredContents.equals(contents)) {
+            atlasStack.set(ModComponents.ATLAS_CONTENTS, ensuredContents);
+            contents = ensuredContents;
+        }
 
+        syncAtlasMapsToPlayer((ServerPlayer) player, serverLevel, contents);
+        AtlasViewManager.startViewing((ServerPlayer) player, contents.allMapIds());
+        ServerPlayNetworking.send((ServerPlayer) player, createOpenPayload((ServerPlayer) player, serverLevel, contents));
 
         return InteractionResult.SUCCESS;
     }
@@ -204,31 +215,70 @@ public class AtlasItem extends Item {
 
         // Mirror vanilla carried-map behavior so the player marker is present on the held atlas map.
         Items.FILLED_MAP.inventoryTick(stack, level, entity, slot);
+
+        // Also update sub-map if player is inside one
+        if (!contents.subMapIds().isEmpty()) {
+            Integer currentSubMapRawId = AtlasMapSelector.findCurrentMapRawId(
+                    level,
+                    player.getX(),
+                    player.getZ(),
+                    contents.subMapIds(),
+                    null
+            );
+            if (currentSubMapRawId != null) {
+                MapId subMapId = new MapId(currentSubMapRawId);
+                MapItemSavedData subMapData = level.getMapData(subMapId);
+                if (subMapData != null && !subMapData.locked) {
+                    subMapData.getHoldingPlayer(player);
+                    subMapData.tickCarriedBy(player, stack, null);
+                    ((MapItem) Items.FILLED_MAP).update(level, player, subMapData);
+                }
+            }
+        }
     }
 
 
     public static OpenAtlasScreenPayload createOpenPayload(ServerPlayer player, ServerLevel level, AtlasContents contents) {
-        AtlasLayout layout = AtlasLayoutBuilder.build(level, contents);
         String overworldKey = net.minecraft.world.level.Level.OVERWORLD.identifier().toString();
         String playerDimension = player.level().dimension().identifier().toString();
+        List<AtlasTilePayload> allTiles = new java.util.ArrayList<>();
+
+        AtlasLayout layout = AtlasLayoutBuilder.build(level, contents.mapIds());
+        for (var entry : layout.entries()) {
+            MapItemSavedData mapData = level.getMapData(new MapId(entry.mapId()));
+            String dimension = (mapData != null) ? mapData.dimension.identifier().toString() : overworldKey;
+            int scale = (mapData != null) ? mapData.scale : 1;
+            allTiles.add(new AtlasTilePayload(
+                    entry.mapId(),
+                    entry.centerX(),
+                    entry.centerZ(),
+                    entry.tileX(),
+                    entry.tileY(),
+                    dimension,
+                    scale
+            ));
+        }
+
+        if (!contents.subMapIds().isEmpty()) {
+            AtlasLayout subLayout = AtlasLayoutBuilder.build(level, contents.subMapIds());
+            for (var entry : subLayout.entries()) {
+                MapItemSavedData mapData = level.getMapData(new MapId(entry.mapId()));
+                String dimension = (mapData != null) ? mapData.dimension.identifier().toString() : overworldKey;
+                int scale = (mapData != null) ? mapData.scale : 0;
+                allTiles.add(new AtlasTilePayload(
+                        entry.mapId(),
+                        entry.centerX(),
+                        entry.centerZ(),
+                        entry.tileX(),
+                        entry.tileY(),
+                        dimension,
+                        scale
+                ));
+            }
+        }
+
         return new OpenAtlasScreenPayload(
-                layout.entries().stream()
-                        .map(entry -> {
-                            net.minecraft.world.level.saveddata.maps.MapItemSavedData mapData =
-                                    level.getMapData(new net.minecraft.world.level.saveddata.maps.MapId(entry.mapId()));
-                            String dimension = (mapData != null)
-                                    ? mapData.dimension.identifier().toString()
-                                    : overworldKey;
-                            return new AtlasTilePayload(
-                                    entry.mapId(),
-                                    entry.centerX(),
-                                    entry.centerZ(),
-                                    entry.tileX(),
-                                    entry.tileY(),
-                                    dimension
-                            );
-                        })
-                        .toList(),
+                allTiles,
                 contents.mapIds(),
                 contents.waypoints(),
                 contents.selectedWaypointIconIndex(),
@@ -238,7 +288,7 @@ public class AtlasItem extends Item {
     }
 
     public static void syncAtlasMapsToPlayer(ServerPlayer player, ServerLevel level, AtlasContents contents) {
-        for (int rawId : contents.mapIds()) {
+        for (int rawId : contents.allMapIds()) {
             MapId mapId = new MapId(rawId);
             MapItemSavedData mapData = level.getMapData(mapId);
 
@@ -247,11 +297,16 @@ public class AtlasItem extends Item {
             }
 
             mapData.getHoldingPlayer(player);
+            if (mapData.colors != null && mapData.colors.length > 0) {
+                mapData.setColor(0, 0, mapData.colors[0]);
+                mapData.setColor(127, 127, mapData.colors[mapData.colors.length - 1]);
+            }
             Packet<?> packet = mapData.getUpdatePacket(mapId, player);
 
             if (packet != null) {
                 player.connection.send(packet);
             }
+            MapModCompat.sendRemappedPackets(player, mapId, mapData);
         }
     }
 

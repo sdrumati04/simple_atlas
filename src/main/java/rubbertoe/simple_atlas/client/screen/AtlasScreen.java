@@ -136,6 +136,8 @@ public class AtlasScreen extends Screen {
     private boolean leftDragging = false;
     private float zoom = 2.0f;
     private int selectedBookmarkTab = 0;
+    private int activeViewScale = 1;
+    private @Nullable Button scaleToggleButton = null;
 
     // Waypoint draft/context menu state
     private int selectedWaypointIconIndex;
@@ -322,6 +324,14 @@ public class AtlasScreen extends Screen {
         this.atlasMapIds = new ArrayList<>(atlasMapIds);
         this.atlasWaypoints = new ArrayList<>(waypoints);
         this.playerDimension = playerDimension;
+        int initScale = 0;
+        for (AtlasTilePayload t : this.tiles) {
+            if (t.scale() == 1) {
+                initScale = 1;
+                break;
+            }
+        }
+        this.activeViewScale = initScale;
 
         // Build ordered dimension tab list: known dimensions in order, then unknowns alphabetically.
         LinkedHashSet<String> dimsSeen = getStrings(tiles);
@@ -394,7 +404,21 @@ public class AtlasScreen extends Screen {
     }
 
     private DimensionTileBounds getDimensionTileBounds(String dimension) {
-        return dimensionTileBounds.getOrDefault(dimension, DimensionTileBounds.EMPTY);
+        List<AtlasTilePayload> visible = getVisibleTilesForDimension(dimension);
+        if (visible.isEmpty()) {
+            return DimensionTileBounds.EMPTY;
+        }
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        for (AtlasTilePayload tile : visible) {
+            minX = Math.min(minX, tile.tileX());
+            maxX = Math.max(maxX, tile.tileX());
+            minY = Math.min(minY, tile.tileY());
+            maxY = Math.max(maxY, tile.tileY());
+        }
+        int width = Math.max(1, maxX - minX + 1);
+        int height = Math.max(1, maxY - minY + 1);
+        return new DimensionTileBounds(minX, minY, width, height);
     }
 
     private int localTileX(String dimension, AtlasTilePayload tile) {
@@ -418,6 +442,35 @@ public class AtlasScreen extends Screen {
     @Override
     protected void init() {
         super.init();
+
+        if (scaleToggleButton != null) {
+            this.removeWidget(scaleToggleButton);
+            scaleToggleButton = null;
+        }
+
+        if (hasMultipleScales()) {
+            AtlasViewport viewport = getAtlasViewport();
+            int btnWidth = 64;
+            int btnHeight = 16;
+            int btnX = (int) Math.floor(viewport.contentX() + 6);
+            int btnY = (int) Math.floor(viewport.contentY() + 6);
+            scaleToggleButton = this.addRenderableWidget(new AtlasTextButton(
+                    btnX,
+                    btnY,
+                    btnWidth,
+                    btnHeight,
+                    getScaleButtonMessage(),
+                    0xFFFFFFFF,
+                    0xD0181818,
+                    0xE0383838,
+                    0xFF8A8A8A,
+                    true,
+                    true,
+                    0,
+                    _ -> toggleScale()
+            ));
+        }
+
         centerOnPlayerPosition();
 
         // Play sound when atlas is opened
@@ -430,6 +483,28 @@ public class AtlasScreen extends Screen {
         if (waypointDraft != null || isContextMenuOpen()) {
             rebuildOverlayWidgets();
         }
+    }
+
+    private void toggleScale() {
+        activeViewScale = (activeViewScale == 1) ? 0 : 1;
+        if (scaleToggleButton != null) {
+            scaleToggleButton.setMessage(getScaleButtonMessage());
+        }
+        centerOnSelectedDimensionAtCurrentZoom();
+    }
+
+    private Component getScaleButtonMessage() {
+        return Component.literal(activeViewScale == 1 ? "Scala 1:2" : "Scala 1:1");
+    }
+
+    private boolean hasMultipleScales() {
+        boolean has0 = false;
+        boolean has1 = false;
+        for (AtlasTilePayload tile : tiles) {
+            if (tile.scale() == 0) has0 = true;
+            if (tile.scale() == 1) has1 = true;
+        }
+        return has0 && has1;
     }
 
     private record AtlasViewport(float x, float y, float width, float height, float contentX, float contentY, float contentWidth, float contentHeight) {}
@@ -569,8 +644,12 @@ public class AtlasScreen extends Screen {
             return null;
         }
 
-        MapItemSavedData firstData = minecraft.level.getMapData(new MapId(tiles.getFirst().mapId()));
-        return firstData != null ? (1 << firstData.scale) : null;
+        List<AtlasTilePayload> visible = getVisibleTilesForDimension(getSelectedDimension());
+        if (visible.isEmpty()) {
+            visible = tiles;
+        }
+
+        return 1 << visible.getFirst().scale();
     }
 
     private WorldPoint screenToWorldPoint(
@@ -741,9 +820,7 @@ public class AtlasScreen extends Screen {
         }
 
         String selectedDimension = getSelectedDimension();
-        List<AtlasTilePayload> visibleTiles = tiles.stream()
-                .filter(t -> t.dimension().equals(selectedDimension))
-                .toList();
+        List<AtlasTilePayload> visibleTiles = getVisibleTilesForDimension(selectedDimension);
 
         int hoveredWaypointIndex = findHoveredWaypointIndex(
                 Minecraft.getInstance(),
@@ -1075,6 +1152,10 @@ public class AtlasScreen extends Screen {
 
     private void rebuildOverlayWidgets() {
         clearOverlayWidgets();
+
+        if (scaleToggleButton != null) {
+            scaleToggleButton.visible = (waypointDraft == null && !isContextMenuOpen());
+        }
 
         if (waypointDraft != null && !waypointIconOptions.isEmpty()) {
             buildWaypointDraftWidgets();
@@ -1809,9 +1890,7 @@ public class AtlasScreen extends Screen {
         renderDashedTileGrid(graphics, viewport, mapOriginX, mapOriginY, scaledTileSize);
 
         String selectedDimension = getSelectedDimension();
-        List<AtlasTilePayload> visibleTiles = tiles.stream()
-                .filter(t -> t.dimension().equals(selectedDimension))
-                .toList();
+        List<AtlasTilePayload> visibleTiles = getVisibleTilesForDimension(selectedDimension);
 
         for (AtlasTilePayload tile : visibleTiles) {
             float x = mapOriginX + localTileX(selectedDimension, tile) * scaledTileSize;
@@ -1974,9 +2053,15 @@ public class AtlasScreen extends Screen {
     }
 
     private List<AtlasTilePayload> getVisibleTilesForDimension(String dimension) {
-        return tiles.stream()
-                .filter(t -> t.dimension().equals(dimension))
+        List<AtlasTilePayload> forDim = tiles.stream()
+                .filter(t -> t.dimension().equals(dimension) && t.scale() == activeViewScale)
                 .toList();
+        if (forDim.isEmpty()) {
+            forDim = tiles.stream()
+                    .filter(t -> t.dimension().equals(dimension))
+                    .toList();
+        }
+        return forDim;
     }
 
     // ----- Screen input + lifecycle overrides -----
@@ -2015,6 +2100,10 @@ public class AtlasScreen extends Screen {
             }
         }
 
+        if (event.button() == 0 && scaleToggleButton != null && scaleToggleButton.visible && scaleToggleButton.mouseClicked(event, doubleClick)) {
+            return true;
+        }
+
         if (event.button() == 1) {
             return handleMapRightClick(event, buildMapInteractionContext());
         }
@@ -2044,6 +2133,7 @@ public class AtlasScreen extends Screen {
     public boolean mouseReleased(MouseButtonEvent event) {
         if (event.button() == 0) {
             leftDragging = false;
+            super.mouseReleased(event);
             return true;
         }
 
