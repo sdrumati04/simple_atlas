@@ -1,7 +1,19 @@
 package rubbertoe.simple_atlas.cartography;
 
+import com.google.common.collect.Iterables;
+import com.google.common.collect.LinkedHashMultiset;
+import com.google.common.collect.Multiset;
+import com.google.common.collect.Multisets;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.SectionPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.MapColor;
 import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
@@ -84,6 +96,11 @@ public final class AtlasCartographyScaler {
 
             if (buffer != null) {
                 ProjectionMask projection = buffer.resolveTargetPixels(target);
+                ServerLevel mapLevel = level.getServer().getLevel(target.dimension);
+                if (mapLevel == null) {
+                    mapLevel = level;
+                }
+                scanWorldBlocksForScaledMap(mapLevel, target, projection.projectedCoverage, buffer.getTargetRem());
                 applyExplorationEdgeShading(target, projection.newlyFilled, projection.projectedCoverage, buffer.getTargetRem());
                 if (buffer.getTargetRem() != null) {
                     MapModCompat.setRemappedColors(target, buffer.getTargetRem());
@@ -92,6 +109,7 @@ public final class AtlasCartographyScaler {
 
             MapId newId = level.getFreeMapId();
             level.setMapData(newId, target);
+            target.setDirty();
             newMapIds.add(newId.id());
         }
 
@@ -346,6 +364,207 @@ public final class AtlasCartographyScaler {
                 }
             }
         }
+    }
+
+    // ----- Real world block scanning (1:1 identical to walking on foot) -----
+
+    private static void scanWorldBlocksForScaledMap(
+            ServerLevel level,
+            MapItemSavedData target,
+            boolean[] projectedCoverage,
+            @Nullable ArrayList<Integer> targetRem
+    ) {
+        int scaleFactor = 1 << target.scale;
+        int centerX = target.centerX;
+        int centerZ = target.centerZ;
+        boolean hasCeiling = level.dimensionType().hasCeiling();
+        boolean useRemapped = MapModCompat.isRemappedLoaded();
+
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        BlockPos.MutableBlockPos fluidPos = new BlockPos.MutableBlockPos();
+
+        int lastChunkX = Integer.MIN_VALUE;
+        int lastChunkZ = Integer.MIN_VALUE;
+        LevelChunk cachedChunk = null;
+
+        for (int x = 0; x < MAP_SIZE; ++x) {
+            double d0 = 0.0D;
+
+            for (int y = -1; y < MAP_SIZE; ++y) {
+                boolean isExplored = y >= 0 && projectedCoverage[x + y * MAP_SIZE];
+                boolean nextIsExplored = y < MAP_SIZE - 1 && projectedCoverage[x + (y + 1) * MAP_SIZE];
+
+                if (!isExplored && !nextIsExplored) {
+                    d0 = 0.0D;
+                    continue;
+                }
+
+                int startBlockX = (centerX / scaleFactor + x - 64) * scaleFactor;
+                int startBlockZ = (centerZ / scaleFactor + y - 64) * scaleFactor;
+
+                int chunkX = SectionPos.blockToSectionCoord(startBlockX);
+                int chunkZ = SectionPos.blockToSectionCoord(startBlockZ);
+                if (cachedChunk == null || lastChunkX != chunkX || lastChunkZ != chunkZ) {
+                    lastChunkX = chunkX;
+                    lastChunkZ = chunkZ;
+                    cachedChunk = level.getChunk(chunkX, chunkZ);
+                }
+
+                if (cachedChunk == null || cachedChunk.isEmpty()) {
+                    d0 = 0.0D;
+                    continue;
+                }
+
+                int fluidDepthSum = 0;
+                double sumY = 0.0D;
+                Multiset<MapColor> vanillaCounts = LinkedHashMultiset.create();
+                Multiset<Object> remappedCounts = useRemapped ? LinkedHashMultiset.create() : null;
+
+                if (hasCeiling) {
+                    int k = startBlockX + startBlockZ * 231871;
+                    k = k * k * 31287121 + k * 11;
+                    if ((k >> 20 & 1) == 0) {
+                        vanillaCounts.add(Blocks.DIRT.defaultBlockState().getMapColor(level, BlockPos.ZERO), 10);
+                        if (useRemapped) {
+                            Object dirtDuck = MapModCompat.getRemappedDirt(level);
+                            if (dirtDuck != null) {
+                                remappedCounts.add(dirtDuck, 10);
+                            }
+                        }
+                    } else {
+                        vanillaCounts.add(Blocks.STONE.defaultBlockState().getMapColor(level, BlockPos.ZERO), 100);
+                        if (useRemapped) {
+                            Object stoneDuck = MapModCompat.getRemappedStone(level);
+                            if (stoneDuck != null) {
+                                remappedCounts.add(stoneDuck, 100);
+                            }
+                        }
+                    }
+                    sumY = 100.0D;
+                } else {
+                    for (int dx = 0; dx < scaleFactor; ++dx) {
+                        for (int dz = 0; dz < scaleFactor; ++dz) {
+                            int worldX = startBlockX + dx;
+                            int worldZ = startBlockZ + dz;
+                            int bChunkX = SectionPos.blockToSectionCoord(worldX);
+                            int bChunkZ = SectionPos.blockToSectionCoord(worldZ);
+                            if (cachedChunk == null || lastChunkX != bChunkX || lastChunkZ != bChunkZ) {
+                                lastChunkX = bChunkX;
+                                lastChunkZ = bChunkZ;
+                                cachedChunk = level.getChunk(bChunkX, bChunkZ);
+                            }
+                            if (cachedChunk == null || cachedChunk.isEmpty()) {
+                                continue;
+                            }
+
+                            pos.set(worldX, 0, worldZ);
+                            int surfaceY = cachedChunk.getHeight(Heightmap.Types.WORLD_SURFACE, pos.getX(), pos.getZ()) + 1;
+                            BlockState state;
+                            if (surfaceY <= level.getMinY()) {
+                                state = Blocks.BEDROCK.defaultBlockState();
+                            } else {
+                                do {
+                                    --surfaceY;
+                                    pos.setY(surfaceY);
+                                    state = cachedChunk.getBlockState(pos);
+                                } while (isStateInvisible(level, pos, state, useRemapped) && surfaceY > level.getMinY());
+
+                                if (surfaceY > level.getMinY() && !state.getFluidState().isEmpty()) {
+                                    int fluidDepth = surfaceY - 1;
+                                    fluidPos.set(pos);
+                                    BlockState fluidState;
+                                    do {
+                                        fluidPos.setY(fluidDepth--);
+                                        fluidState = cachedChunk.getBlockState(fluidPos);
+                                        fluidDepthSum++;
+                                    } while (fluidDepth > level.getMinY() && !fluidState.getFluidState().isEmpty());
+
+                                    state = getCorrectStateForFluidBlock(level, state, pos);
+                                }
+                            }
+
+                            target.checkBanners(level, pos.getX(), pos.getZ());
+                            sumY += (double) surfaceY / (double) (scaleFactor * scaleFactor);
+
+                            vanillaCounts.add(state.getMapColor(level, pos));
+                            if (useRemapped) {
+                                Object matchingDuck = MapModCompat.getMatchingColor(level, pos, state);
+                                if (matchingDuck != null) {
+                                    remappedCounts.add(matchingDuck);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                fluidDepthSum /= (scaleFactor * scaleFactor);
+
+                MapColor dominantVanilla = Iterables.getFirst(Multisets.copyHighestCountFirst(vanillaCounts), MapColor.NONE);
+
+                Object dominantDuck = null;
+                boolean useDithering = false;
+                if (useRemapped && remappedCounts != null) {
+                    dominantDuck = Iterables.getFirst(Multisets.copyHighestCountFirst(remappedCounts), null);
+                    if (dominantDuck != null) {
+                        useDithering = MapModCompat.useDithering(dominantDuck);
+                    }
+                } else if (dominantVanilla == MapColor.WATER) {
+                    useDithering = true;
+                }
+
+                MapColor.Brightness brightness;
+                if (useDithering) {
+                    double depthDither = (double) fluidDepthSum * 0.1D + (double) (x + y & 1) * 0.2D;
+                    if (depthDither < 0.5D) {
+                        brightness = MapColor.Brightness.HIGH;
+                    } else if (depthDither > 0.9D) {
+                        brightness = MapColor.Brightness.LOW;
+                    } else {
+                        brightness = MapColor.Brightness.NORMAL;
+                    }
+                } else {
+                    double delta = (sumY - d0) * 4.0D / (double) (scaleFactor + 4) + ((double) (x + y & 1) - 0.5D) * 0.4D;
+                    if (delta > 0.6D) {
+                        brightness = MapColor.Brightness.HIGH;
+                    } else if (delta < -0.6D) {
+                        brightness = MapColor.Brightness.LOW;
+                    } else {
+                        brightness = MapColor.Brightness.NORMAL;
+                    }
+                }
+
+                d0 = sumY;
+
+                if (isExplored) {
+                    int targetIndex = x + y * MAP_SIZE;
+                    if (dominantVanilla != null && dominantVanilla != MapColor.NONE) {
+                        target.setColor(x, y, dominantVanilla.getPackedId(brightness));
+                    }
+                    if (useRemapped && dominantDuck != null) {
+                        MapModCompat.putColor(target, x, y, dominantDuck, brightness.id);
+                        if (targetRem != null) {
+                            targetRem.set(targetIndex, MapModCompat.getRemappedColor(target, targetIndex));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static BlockState getCorrectStateForFluidBlock(Level level, BlockState state, BlockPos pos) {
+        FluidState fluidState = state.getFluidState();
+        if (!fluidState.isEmpty() && !state.isFaceSturdy(level, pos, Direction.UP)) {
+            return fluidState.createLegacyBlock();
+        }
+        return state;
+    }
+
+    private static boolean isStateInvisible(Level level, BlockPos pos, BlockState state, boolean useRemapped) {
+        if (useRemapped) {
+            Object duck = MapModCompat.getMatchingColor(level, pos, state);
+            return duck == null || MapModCompat.getDuckColor(duck) == 0;
+        }
+        return state.getMapColor(level, pos) == MapColor.NONE;
     }
 
     private record ProjectionMask(boolean[] newlyFilled, boolean[] projectedCoverage) {}
