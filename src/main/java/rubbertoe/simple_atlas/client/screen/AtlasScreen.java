@@ -112,8 +112,8 @@ public class AtlasScreen extends Screen {
     private static final int GRID_DASH_GAP = 4;
     private static final int GRID_DASH_COLOR = 0x50D1BFA1;
     private static final int TILE_SIZE = 64;
-    private static final float MIN_ZOOM = 0.25f;
-    private static final float MAX_ZOOM = 4.0f;
+    private static final float MIN_ZOOM = 0.0625f;
+    private static final float MAX_ZOOM = 16.0f;
     private static final float ZOOM_STEP = 1.1f;
 
     // Immutable atlas payload/state
@@ -502,7 +502,7 @@ public class AtlasScreen extends Screen {
 
         String dimension = getSelectedDimension();
         AtlasViewport viewport = getAtlasViewport();
-        float scaledTileSize = TILE_SIZE * zoom;
+        float oldScaledTileSize = TILE_SIZE * zoom;
 
         List<AtlasTilePayload> oldTiles = getVisibleTilesForDimension(dimension);
         List<AtlasTilePayload> newTiles = tiles.stream()
@@ -519,39 +519,43 @@ public class AtlasScreen extends Screen {
         double screenCenterX = viewport.contentX() + viewport.contentWidth() / 2.0;
         double screenCenterY = viewport.contentY() + viewport.contentHeight() / 2.0;
 
-        // 1. Calculate world point currently at the center of the viewport under old scale
+        // 1. Calculate world point currently at the center of the viewport under old scale and old zoom
         AtlasTilePayload oldTile = oldTiles.getFirst();
         int oldScaleFactor = 1 << oldTile.scale();
-        float oldOriginX = getMapOriginX(viewport, scaledTileSize, dimension);
-        float oldOriginY = getMapOriginY(viewport, scaledTileSize, dimension);
+        float oldOriginX = getMapOriginX(viewport, oldScaledTileSize, dimension);
+        float oldOriginY = getMapOriginY(viewport, oldScaledTileSize, dimension);
 
-        float oldTileScreenX = oldOriginX + (float) panX + localTileX(dimension, oldTile) * scaledTileSize;
-        float oldTileScreenY = oldOriginY + (float) panY + localTileY(dimension, oldTile) * scaledTileSize;
+        float oldTileScreenX = oldOriginX + (float) panX + localTileX(dimension, oldTile) * oldScaledTileSize;
+        float oldTileScreenY = oldOriginY + (float) panY + localTileY(dimension, oldTile) * oldScaledTileSize;
 
         double oldTileWorldMinX = oldTile.centerX() - 64.0 * oldScaleFactor;
         double oldTileWorldMinZ = oldTile.centerZ() - 64.0 * oldScaleFactor;
 
-        double centerWorldX = oldTileWorldMinX + ((screenCenterX - oldTileScreenX) / (scaledTileSize / 128.0)) * oldScaleFactor;
-        double centerWorldZ = oldTileWorldMinZ + ((screenCenterY - oldTileScreenY) / (scaledTileSize / 128.0)) * oldScaleFactor;
+        double centerWorldX = oldTileWorldMinX + ((screenCenterX - oldTileScreenX) / (oldScaledTileSize / 128.0)) * oldScaleFactor;
+        double centerWorldZ = oldTileWorldMinZ + ((screenCenterY - oldTileScreenY) / (oldScaledTileSize / 128.0)) * oldScaleFactor;
 
         // 2. Set the new scale
         activeViewScale = newScale;
         rebuildScaleWidgets();
 
-        // 3. Compute new panX and panY so centerWorldX and centerWorldZ remain at screenCenterX and screenCenterY
+        // 3. Compensate zoom proportionally to prevent digital zoom in/out:
+        // Keeps the exact same world area and physical scale on screen!
         AtlasTilePayload newTile = newTiles.getFirst();
         int newScaleFactor = 1 << newTile.scale();
-        float newOriginX = getMapOriginX(viewport, scaledTileSize, dimension);
-        float newOriginY = getMapOriginY(viewport, scaledTileSize, dimension);
+        this.zoom = Math.clamp(this.zoom * ((float) newScaleFactor / (float) oldScaleFactor), MIN_ZOOM, MAX_ZOOM);
+
+        float newScaledTileSize = TILE_SIZE * zoom;
+        float newOriginX = getMapOriginX(viewport, newScaledTileSize, dimension);
+        float newOriginY = getMapOriginY(viewport, newScaledTileSize, dimension);
 
         double newTileWorldMinX = newTile.centerX() - 64.0 * newScaleFactor;
         double newTileWorldMinZ = newTile.centerZ() - 64.0 * newScaleFactor;
 
-        double newTileScreenX = screenCenterX - ((centerWorldX - newTileWorldMinX) / newScaleFactor) * (scaledTileSize / 128.0);
-        double newTileScreenY = screenCenterY - ((centerWorldZ - newTileWorldMinZ) / newScaleFactor) * (scaledTileSize / 128.0);
+        double newTileScreenX = screenCenterX - ((centerWorldX - newTileWorldMinX) / newScaleFactor) * (newScaledTileSize / 128.0);
+        double newTileScreenY = screenCenterY - ((centerWorldZ - newTileWorldMinZ) / newScaleFactor) * (newScaledTileSize / 128.0);
 
-        this.panX = newTileScreenX - newOriginX - localTileX(dimension, newTile) * scaledTileSize;
-        this.panY = newTileScreenY - newOriginY - localTileY(dimension, newTile) * scaledTileSize;
+        this.panX = newTileScreenX - newOriginX - localTileX(dimension, newTile) * newScaledTileSize;
+        this.panY = newTileScreenY - newOriginY - localTileY(dimension, newTile) * newScaledTileSize;
     }
 
     private void rebuildScaleWidgets() {
