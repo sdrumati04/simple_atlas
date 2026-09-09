@@ -33,10 +33,13 @@ public class SimpleAtlasLangProvider extends FabricLanguageProvider {
         translationBuilder.add("menu.simple_atlas.map.new_waypoint", "New waypoint");
         translationBuilder.add("menu.simple_atlas.map.remove", "Remove map from atlas");
         translationBuilder.add("message.simple_atlas.coordinates_copied", "Copied coordinates: %s, %s");
+        translationBuilder.add("message.simple_atlas.waypoint_added", "Waypoint added: %s");
         translationBuilder.add("message.simple_atlas.waypoint_limit_reached", "Atlas waypoint limit reached (%s)");
         translationBuilder.add("message.simple_atlas.no_maps_inserted", "Your atlas has no maps inserted");
         translationBuilder.add("tooltip.simple_atlas.no_maps", "No maps inserted");
         translationBuilder.add("tooltip.simple_atlas.scale", "Scale: (1:%s)");
+        translationBuilder.add("tooltip.simple_atlas.scales", "Scales: %s");
+        translationBuilder.add("gui.simple_atlas.scale_ratio", "Scale 1:%s");
         translationBuilder.add("config.simple_atlas.title", "Simple Atlas Config");
         translationBuilder.add("config.simple_atlas.category.general", "General");
         translationBuilder.add("config.simple_atlas.max_atlas_map_count", "Max maps per atlas");

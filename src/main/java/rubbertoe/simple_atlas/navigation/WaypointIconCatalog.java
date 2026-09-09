@@ -91,11 +91,15 @@ public final class WaypointIconCatalog {
         );
     }
 
-    public static UUID navigationWaypointId(double worldX, double worldZ) {
+    public static UUID navigationWaypointId(String dimension, double worldX, double worldZ) {
         int x = (int) Math.floor(worldX);
         int z = (int) Math.floor(worldZ);
-        String seed = "simple_atlas_nav:" + x + ":" + z;
+        String seed = "simple_atlas_nav:" + (dimension != null ? dimension : "") + ":" + x + ":" + z;
         return UUID.nameUUIDFromBytes(seed.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static UUID navigationWaypointId(double worldX, double worldZ) {
+        return navigationWaypointId("", worldX, worldZ);
     }
 }
 

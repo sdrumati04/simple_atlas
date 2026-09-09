@@ -10,7 +10,8 @@ import rubbertoe.simple_atlas.SimpleAtlas;
 
 public record UnpinWaypointPayload(
         double worldX,
-        double worldZ
+        double worldZ,
+        String dimension
 ) implements CustomPacketPayload {
     public static final Type<UnpinWaypointPayload> TYPE =
             new Type<>(Identifier.fromNamespaceAndPath(SimpleAtlas.MOD_ID, "unpin_waypoint"));
@@ -21,6 +22,8 @@ public record UnpinWaypointPayload(
                     UnpinWaypointPayload::worldX,
                     ByteBufCodecs.DOUBLE,
                     UnpinWaypointPayload::worldZ,
+                    ByteBufCodecs.STRING_UTF8,
+                    UnpinWaypointPayload::dimension,
                     UnpinWaypointPayload::new
             );
 

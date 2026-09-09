@@ -25,6 +25,7 @@
   "config.simple_atlas.waypoint_icon_size.tooltip": "Scale factor for waypoint icons (0.5 to 2.0)",
   "gui.simple_atlas.cancel": "Cancel",
   "gui.simple_atlas.confirm": "Confirm",
+  "gui.simple_atlas.scale_ratio": "Scale 1:%s",
   "gui.simple_atlas.waypoint.default_name": "Waypoint",
   "gui.simple_atlas.waypoint.edit_title": "Edit Waypoint",
   "gui.simple_atlas.waypoint.new_title": "New Waypoint",
@@ -42,8 +43,10 @@
   "menu.simple_atlas.waypoint.stop_locating": "Stop Locating",
   "message.simple_atlas.coordinates_copied": "Copied coordinates: %s, %s",
   "message.simple_atlas.no_maps_inserted": "Your atlas has no maps inserted",
+  "message.simple_atlas.waypoint_added": "Waypoint added: %s",
   "message.simple_atlas.waypoint_limit_reached": "Atlas waypoint limit reached (%s)",
   "screen.simple_atlas.atlas.title": "Atlas",
   "tooltip.simple_atlas.no_maps": "No maps inserted",
-  "tooltip.simple_atlas.scale": "Scale: (1:%s)"
+  "tooltip.simple_atlas.scale": "Scale: (1:%s)",
+  "tooltip.simple_atlas.scales": "Scales: %s"
 }

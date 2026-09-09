@@ -118,7 +118,6 @@ public class AtlasScreen extends Screen {
 
     // Immutable atlas payload/state
     private final List<AtlasTilePayload> tiles;
-    private final Map<String, DimensionTileBounds> dimensionTileBounds;
     private final List<Integer> atlasMapIds;
     private final PlayerAtlasIcon playerIcon;
     private final List<AtlasIcon> atlasIcons;
@@ -128,6 +127,13 @@ public class AtlasScreen extends Screen {
     private final List<String> dimensionTabs;
     /** Player's current dimension when atlas was opened. */
     private final String playerDimension;
+
+    // Render cache
+    private String cachedDimension = null;
+    private int cachedScale = -1;
+    private List<AtlasTilePayload> cachedVisibleTiles = List.of();
+    private DimensionTileBounds cachedDimensionBounds = DimensionTileBounds.EMPTY;
+    private boolean waypointsDirty = false;
 
     // Map interaction state
     private final Map<Integer, MapRenderState> renderStates = new HashMap<>();
@@ -308,7 +314,8 @@ public class AtlasScreen extends Screen {
                 payload.waypoints(),
                 payload.selectedWaypointIconIndex(),
                 payload.nextWaypointNumber(),
-                payload.playerDimension()
+                payload.playerDimension(),
+                payload.selectedScale()
         );
     }
 
@@ -320,36 +327,49 @@ public class AtlasScreen extends Screen {
             int nextWaypointNumber,
             String playerDimension
     ) {
+        this(tiles, atlasMapIds, waypoints, selectedWaypointIconIndex, nextWaypointNumber, playerDimension, -1);
+    }
+
+    public AtlasScreen(
+            List<AtlasTilePayload> tiles,
+            List<Integer> atlasMapIds,
+            List<AtlasContents.WaypointData> waypoints,
+            int selectedWaypointIconIndex,
+            int nextWaypointNumber,
+            String playerDimension,
+            int selectedScale
+    ) {
         super(Component.translatable("screen.simple_atlas.atlas.title"));
         this.tiles = new ArrayList<>(tiles);
-        this.dimensionTileBounds = buildDimensionTileBounds(this.tiles);
         this.atlasMapIds = new ArrayList<>(atlasMapIds);
         this.atlasWaypoints = new ArrayList<>(waypoints);
         this.playerDimension = playerDimension;
-        int initScale = 0;
-        boolean foundBaseScale = false;
-        for (AtlasTilePayload t : this.tiles) {
-            if (this.atlasMapIds.contains(t.mapId())) {
-                initScale = t.scale();
-                foundBaseScale = true;
-                break;
-            }
-        }
-        if (!foundBaseScale) {
-            for (AtlasTilePayload t : this.tiles) {
-                if (t.scale() > initScale) {
-                    initScale = t.scale();
-                }
-            }
-        }
-        this.activeViewScale = initScale;
-
         // Build ordered dimension tab list: known dimensions in order, then unknowns alphabetically.
         LinkedHashSet<String> dimsSeen = getStrings(tiles);
         this.dimensionTabs = List.copyOf(dimsSeen);
 
         // Select the tab for the player's current dimension, or default to first available tab
         this.selectedBookmarkTab = findDimensionTabIndex(playerDimension);
+
+        String initialDim = getSelectedDimension();
+        int initScale = -1;
+        if (selectedScale >= 0) {
+            for (AtlasTilePayload t : this.tiles) {
+                if (t.dimension().equals(initialDim) && t.scale() == selectedScale) {
+                    initScale = selectedScale;
+                    break;
+                }
+            }
+        }
+        if (initScale < 0) {
+            for (AtlasTilePayload t : this.tiles) {
+                if (t.dimension().equals(initialDim)) {
+                    initScale = t.scale();
+                    break;
+                }
+            }
+        }
+        this.activeViewScale = initScale >= 0 ? initScale : 0;
 
         this.playerIcon = new PlayerAtlasIcon(
                 PLAYER_MARKER_TEXTURE,
@@ -391,27 +411,37 @@ public class AtlasScreen extends Screen {
         return dimsSeen;
     }
 
-    private static Map<String, DimensionTileBounds> buildDimensionTileBounds(List<AtlasTilePayload> tiles) {
-        Map<String, int[]> minMaxByDimension = new HashMap<>();
-        for (AtlasTilePayload tile : tiles) {
-            int[] minMax = minMaxByDimension.computeIfAbsent(
-                    tile.dimension(),
-                    _ -> new int[] {tile.tileX(), tile.tileX(), tile.tileY(), tile.tileY()}
-            );
-            minMax[0] = Math.min(minMax[0], tile.tileX());
-            minMax[1] = Math.max(minMax[1], tile.tileX());
-            minMax[2] = Math.min(minMax[2], tile.tileY());
-            minMax[3] = Math.max(minMax[3], tile.tileY());
+    private void updateTileCacheIfNeeded() {
+        String dimension = getSelectedDimension();
+        if (dimension == null) {
+            cachedDimension = null;
+            cachedScale = -1;
+            cachedVisibleTiles = List.of();
+            cachedDimensionBounds = DimensionTileBounds.EMPTY;
+            return;
         }
-
-        Map<String, DimensionTileBounds> bounds = new HashMap<>();
-        for (Map.Entry<String, int[]> entry : minMaxByDimension.entrySet()) {
-            int[] minMax = entry.getValue();
-            int width = Math.max(1, minMax[1] - minMax[0] + 1);
-            int height = Math.max(1, minMax[3] - minMax[2] + 1);
-            bounds.put(entry.getKey(), new DimensionTileBounds(minMax[0], minMax[2], width, height));
+        if (!dimension.equals(cachedDimension) || activeViewScale != cachedScale) {
+            cachedDimension = dimension;
+            cachedScale = activeViewScale;
+            cachedVisibleTiles = tiles.stream()
+                    .filter(t -> t.dimension().equals(dimension) && t.scale() == activeViewScale)
+                    .toList();
+            if (cachedVisibleTiles.isEmpty()) {
+                cachedDimensionBounds = DimensionTileBounds.EMPTY;
+            } else {
+                int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+                int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+                for (AtlasTilePayload tile : cachedVisibleTiles) {
+                    minX = Math.min(minX, tile.tileX());
+                    maxX = Math.max(maxX, tile.tileX());
+                    minY = Math.min(minY, tile.tileY());
+                    maxY = Math.max(maxY, tile.tileY());
+                }
+                int width = Math.max(1, maxX - minX + 1);
+                int height = Math.max(1, maxY - minY + 1);
+                cachedDimensionBounds = new DimensionTileBounds(minX, minY, width, height);
+            }
         }
-        return bounds;
     }
 
     private DimensionTileBounds getDimensionTileBounds(String dimension) {
@@ -644,11 +674,13 @@ public class AtlasScreen extends Screen {
 
     private Component getScaleButtonMessage() {
         int ratio = 1 << activeViewScale;
-        return Component.literal("Scala 1:" + ratio);
+        return Component.translatable("gui.simple_atlas.scale_ratio", ratio);
     }
 
     private List<Integer> getAvailableScales() {
+        String dimension = getSelectedDimension();
         return tiles.stream()
+                .filter(t -> t.dimension().equals(dimension))
                 .map(AtlasTilePayload::scale)
                 .distinct()
                 .sorted()
@@ -861,6 +893,7 @@ public class AtlasScreen extends Screen {
                 selectedWaypointIconIndex,
                 nextWaypointNumber
         ));
+        waypointsDirty = false;
     }
 
     private boolean isContextMenuOpen() {
@@ -1112,7 +1145,8 @@ public class AtlasScreen extends Screen {
         ClientPlayNetworking.send(new NavigateToWaypointPayload(
                 waypoint.worldX(),
                 waypoint.worldZ(),
-                waypoint.iconIndex()
+                waypoint.iconIndex(),
+                waypoint.dimension()
         ));
     }
 
@@ -1127,7 +1161,8 @@ public class AtlasScreen extends Screen {
     private void unpinWaypointFromLocatorBar(AtlasContents.WaypointData waypoint) {
         ClientPlayNetworking.send(new UnpinWaypointPayload(
                 waypoint.worldX(),
-                waypoint.worldZ()
+                waypoint.worldZ(),
+                waypoint.dimension()
         ));
     }
 
@@ -1140,7 +1175,7 @@ public class AtlasScreen extends Screen {
         if (waypoint == null) {
             return false;
         }
-        UUID navigationId = WaypointIconCatalog.navigationWaypointId(waypoint.worldX(), waypoint.worldZ());
+        UUID navigationId = WaypointIconCatalog.navigationWaypointId(waypoint.dimension(), waypoint.worldX(), waypoint.worldZ());
         final boolean[] matched = {false};
         minecraft.player.connection.getWaypointManager().forEachWaypoint(minecraft.player, trackedWaypoint -> {
             Either<UUID, String> id = trackedWaypoint.id();
@@ -1232,6 +1267,7 @@ public class AtlasScreen extends Screen {
 
         atlasWaypoints.remove(waypointIndex);
         atlasIcons.remove(waypointIndex + 1);
+        waypointsDirty = true;
         persistWaypointState();
     }
 
@@ -1513,6 +1549,7 @@ public class AtlasScreen extends Screen {
 
         selectedWaypointIconIndex = waypointDraft.iconIndex;
         clearWaypointDraft();
+        waypointsDirty = true;
         persistWaypointState();
         return true;
     }
@@ -2005,6 +2042,11 @@ public class AtlasScreen extends Screen {
             if (layout.contains(mouseX, mouseY, clipLeft, isSelected, retractionAmount)) {
                 if (!isSelected) {
                     selectedBookmarkTab = layout.tab().index();
+                    List<Integer> availableScales = getAvailableScales();
+                    if (!availableScales.isEmpty() && !availableScales.contains(activeViewScale)) {
+                        activeViewScale = availableScales.getFirst();
+                    }
+                    rebuildScaleWidgets();
                     centerOnSelectedDimensionAtCurrentZoom();
                     closeContextMenu();
                     playBookmarkTabSound();
@@ -2041,12 +2083,14 @@ public class AtlasScreen extends Screen {
 
         renderDashedTileGrid(graphics, viewport, mapOriginX, mapOriginY, scaledTileSize);
 
+        updateTileCacheIfNeeded();
         String selectedDimension = getSelectedDimension();
-        List<AtlasTilePayload> visibleTiles = getVisibleTilesForDimension(selectedDimension);
+        List<AtlasTilePayload> visibleTiles = cachedVisibleTiles;
+        DimensionTileBounds dimBounds = cachedDimensionBounds;
 
         for (AtlasTilePayload tile : visibleTiles) {
-            float x = mapOriginX + localTileX(selectedDimension, tile) * scaledTileSize;
-            float y = mapOriginY + localTileY(selectedDimension, tile) * scaledTileSize;
+            float x = mapOriginX + (tile.tileX() - dimBounds.minTileX()) * scaledTileSize;
+            float y = mapOriginY + (tile.tileY() - dimBounds.minTileY()) * scaledTileSize;
 
             renderMapTile(graphics, tile.mapId(), x, y, scaledTileSize / 128.0f);
 
@@ -2382,10 +2426,10 @@ public class AtlasScreen extends Screen {
 
     @Override
     public void onClose() {
-        if (!skipWaypointSaveOnClose) {
+        if (!skipWaypointSaveOnClose && waypointsDirty) {
             persistWaypointState();
         }
-        ClientPlayNetworking.send(new CloseAtlasViewPayload());
+        ClientPlayNetworking.send(new CloseAtlasViewPayload(this.activeViewScale));
         super.onClose();
     }
 

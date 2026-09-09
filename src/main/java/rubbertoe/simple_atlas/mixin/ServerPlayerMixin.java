@@ -16,7 +16,6 @@ import rubbertoe.simple_atlas.component.AtlasContents;
 import rubbertoe.simple_atlas.component.ModComponents;
 import rubbertoe.simple_atlas.item.ModItems;
 import rubbertoe.simple_atlas.compat.MapModCompat;
-import rubbertoe.simple_atlas.map.AtlasMapSelector;
 import rubbertoe.simple_atlas.server.AtlasWaypointDecorations;
 import rubbertoe.simple_atlas.server.AtlasViewManager;
 
@@ -49,28 +48,6 @@ public abstract class ServerPlayerMixin {
         Packet<?> augmentedPacket = AtlasWaypointDecorations.withAtlasWaypointDecorations(packet, mapData, contents, includeAtlasWaypoints);
         if (augmentedPacket != null) {
             player.connection.send(augmentedPacket);
-        }
-
-        if (!contents.subMapIds().isEmpty()) {
-            Integer currentSubMapRawId = AtlasMapSelector.findCurrentMapRawId(
-                    player.level(),
-                    player.getX(),
-                    player.getZ(),
-                    contents.subMapIds(),
-                    null
-            );
-            if (currentSubMapRawId != null) {
-                MapId subMapId = new MapId(currentSubMapRawId);
-                MapItemSavedData subMapData = player.level().getMapData(subMapId);
-                if (subMapData != null) {
-                    subMapData.getHoldingPlayer(player);
-                    MapModCompat.sendRemappedPackets(player, subMapId, subMapData);
-                    Packet<?> subPacket = subMapData.getUpdatePacket(subMapId, player);
-                    if (subPacket != null) {
-                        player.connection.send(subPacket);
-                    }
-                }
-            }
         }
 
         ci.cancel();

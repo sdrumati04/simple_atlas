@@ -9,6 +9,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 import org.spongepowered.asm.mixin.Final;
@@ -43,8 +44,11 @@ public abstract class CartographyTableMenuMixin {
             CallbackInfo ci
     ) {
         // ── Book + atlas → duplicate the atlas (costs 1 book) ────────────────
-        if (mapStack.is(Items.BOOK) && additionalStack.is(ModItems.ATLAS)) {
-            ItemStack result = additionalStack.copyWithCount(1);
+        boolean isBookAndAtlas = (mapStack.is(Items.BOOK) && additionalStack.is(ModItems.ATLAS))
+                || (mapStack.is(ModItems.ATLAS) && additionalStack.is(Items.BOOK));
+        if (isBookAndAtlas) {
+            ItemStack atlasInput = mapStack.is(ModItems.ATLAS) ? mapStack : additionalStack;
+            ItemStack result = atlasInput.copyWithCount(1);
 
             if (!ItemStack.matches(result, resultStack)) {
                 this.resultContainer.setItem(2, result);
@@ -55,15 +59,20 @@ public abstract class CartographyTableMenuMixin {
         }
 
         // ── Filled map + atlas → add the map to the atlas ────────────────────
-        if (mapStack.is(Items.FILLED_MAP) && additionalStack.is(ModItems.ATLAS)) {
-            MapId mapId = mapStack.get(DataComponents.MAP_ID);
+        boolean isFilledMapAndAtlas = (mapStack.is(Items.FILLED_MAP) && additionalStack.is(ModItems.ATLAS))
+                || (mapStack.is(ModItems.ATLAS) && additionalStack.is(Items.FILLED_MAP));
+        if (isFilledMapAndAtlas) {
+            ItemStack mapInput = mapStack.is(Items.FILLED_MAP) ? mapStack : additionalStack;
+            ItemStack atlasInput = mapStack.is(ModItems.ATLAS) ? mapStack : additionalStack;
+
+            MapId mapId = mapInput.get(DataComponents.MAP_ID);
             if (mapId == null) {
                 simple_atlas$rejectAtlasResult();
                 ci.cancel();
                 return;
             }
 
-            AtlasContents contents = additionalStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+            AtlasContents contents = atlasInput.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
             this.access.execute((level, _) -> {
                 MapItemSavedData newMapData = level.getMapData(mapId);
@@ -72,66 +81,15 @@ public abstract class CartographyTableMenuMixin {
                     return;
                 }
 
-                if (!contents.mapIds().isEmpty()) {
-                    MapItemSavedData originMapData = level.getMapData(new MapId(contents.mapIds().getFirst()));
-                    if (originMapData == null) {
-                        simple_atlas$rejectAtlasResult();
-                        return;
-                    }
-
-                    if (newMapData.scale > originMapData.scale) {
-                        // Higher scale (more zoomed out than atlas) – reject
-                        simple_atlas$rejectAtlasResult();
-                        return;
-                    }
-
-                    if (newMapData.scale < originMapData.scale) {
-                        // Lower scale (more detailed than atlas) – validate and defer to onTake
-                        if (!(level instanceof ServerLevel serverLevel)
-                                || !AtlasCartographyScaler.canIntegrateFinerMap(serverLevel, contents, mapId)) {
-                            simple_atlas$rejectAtlasResult();
-                            return;
-                        }
-                        // Show result as the current atlas; actual map data created on take
-                        ItemStack result = additionalStack.copyWithCount(1);
-                        if (!ItemStack.matches(result, resultStack)) {
-                            this.resultContainer.setItem(2, result);
-                            ((CartographyTableMenu) (Object) this).broadcastChanges();
-                        }
-                        return;
-                    }
-                }
-
-                // Same scale (or empty atlas) – original behavior
+                // Can add map of ANY scale (0..4) as long as not duplicate and atlas has room
                 if (!contents.canAddMapId() || contents.contains(mapId.id())) {
                     simple_atlas$rejectAtlasResult();
                     return;
                 }
 
-                ItemStack result = additionalStack.copyWithCount(1);
+                ItemStack result = atlasInput.copyWithCount(1);
                 result.set(ModComponents.ATLAS_CONTENTS, contents.withAdded(mapId.id()));
 
-                if (!ItemStack.matches(result, resultStack)) {
-                    this.resultContainer.setItem(2, result);
-                    ((CartographyTableMenu) (Object) this).broadcastChanges();
-                }
-            });
-
-            ci.cancel();
-        }
-
-        // ── Atlas + paper → scale every atlas map by +1 (deduped on take) ─────
-        if (mapStack.is(ModItems.ATLAS) && additionalStack.is(Items.PAPER)) {
-            AtlasContents contents = mapStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
-
-            this.access.execute((level, _) -> {
-                if (!(level instanceof ServerLevel serverLevel)
-                        || !AtlasCartographyScaler.canScaleAtlas(serverLevel, contents)) {
-                    simple_atlas$rejectAtlasResult();
-                    return;
-                }
-
-                ItemStack result = mapStack.copyWithCount(1);
                 if (!ItemStack.matches(result, resultStack)) {
                     this.resultContainer.setItem(2, result);
                     ((CartographyTableMenu) (Object) this).broadcastChanges();
@@ -142,16 +100,35 @@ public abstract class CartographyTableMenuMixin {
             return;
         }
 
-        // ── Atlas + atlas → merge contents (requires same size) ──────────────
+        // ── Atlas + paper → scale every atlas map by +1 (deduped on take) ─────
+        boolean isAtlasAndPaper = (mapStack.is(ModItems.ATLAS) && additionalStack.is(Items.PAPER))
+                || (mapStack.is(Items.PAPER) && additionalStack.is(ModItems.ATLAS));
+        if (isAtlasAndPaper) {
+            ItemStack atlasInput = mapStack.is(ModItems.ATLAS) ? mapStack : additionalStack;
+            AtlasContents contents = atlasInput.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+
+            this.access.execute((level, _) -> {
+                if (!(level instanceof ServerLevel serverLevel)
+                        || !AtlasCartographyScaler.canScaleAtlas(serverLevel, contents)) {
+                    simple_atlas$rejectAtlasResult();
+                    return;
+                }
+
+                ItemStack result = atlasInput.copyWithCount(1);
+                if (!ItemStack.matches(result, resultStack)) {
+                    this.resultContainer.setItem(2, result);
+                    ((CartographyTableMenu) (Object) this).broadcastChanges();
+                }
+            });
+
+            ci.cancel();
+            return;
+        }
+
+        // ── Atlas + atlas → merge contents (no size check required) ──────────
         if (mapStack.is(ModItems.ATLAS) && additionalStack.is(ModItems.ATLAS)) {
             AtlasContents topContents = mapStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
             AtlasContents bottomContents = additionalStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
-
-            if (topContents.size() != bottomContents.size()) {
-                simple_atlas$rejectAtlasResult();
-                ci.cancel();
-                return;
-            }
 
             LinkedHashSet<Integer> mergedMapIds = new LinkedHashSet<>(bottomContents.mapIds());
             mergedMapIds.addAll(topContents.mapIds());
@@ -172,6 +149,7 @@ public abstract class CartographyTableMenuMixin {
             }
 
             ci.cancel();
+            return;
         }
     }
 
@@ -215,6 +193,49 @@ public abstract class CartographyTableMenuMixin {
 
         ItemStack stack = slot.getItem();
         ItemStack clicked = stack.copy();
+
+        // ── Result slot (slot 2) quick-move (shift-click) ─────────────────────
+        if (slotIndex == 2 && stack.is(ModItems.ATLAS)) {
+            CartographyTableMenu menu = (CartographyTableMenu) (Object) this;
+            ItemStack slot0 = menu.container.getItem(0);
+            ItemStack slot1 = menu.container.getItem(1);
+
+            // Handle scale take:
+            boolean isScale = (slot0.is(ModItems.ATLAS) && slot1.is(Items.PAPER))
+                    || (slot0.is(Items.PAPER) && slot1.is(ModItems.ATLAS));
+            if (isScale && player instanceof ServerPlayer serverPlayer) {
+                ItemStack atlas = slot0.is(ModItems.ATLAS) ? slot0 : slot1;
+                AtlasContents original = atlas.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                AtlasContents scaled = AtlasCartographyScaler.scaleAtlas(serverPlayer.level(), original);
+                if (scaled != null) {
+                    stack.set(ModComponents.ATLAS_CONTENTS, scaled);
+                }
+            }
+
+            // Move to player inventory
+            if (!((AbstractContainerMenuInvoker) this).simple_atlas$invokeMoveItemStackTo(stack, 3, 39, true)) {
+                cir.setReturnValue(ItemStack.EMPTY);
+                return;
+            }
+
+            slot.onQuickCraft(stack, clicked);
+
+            if (stack.isEmpty()) {
+                slot.setByPlayer(ItemStack.EMPTY);
+            }
+
+            slot.setChanged();
+
+            if (stack.getCount() == clicked.getCount()) {
+                cir.setReturnValue(ItemStack.EMPTY);
+                return;
+            }
+
+            slot.onTake(player, stack);
+            ((AbstractContainerMenuInvoker) this).simple_atlas$invokeBroadcastChanges();
+            cir.setReturnValue(clicked);
+            return;
+        }
 
         // ── Book from inventory → slot 0 ──────────────────────────────────────
         if (stack.is(Items.BOOK) && slotIndex >= 3 && slotIndex < 39) {

@@ -36,7 +36,8 @@ public final class AtlasLayoutBuilder {
                     rawId,
                     data.centerX,
                     data.centerZ,
-                    data.scale
+                    data.scale,
+                    data.dimension
             ));
         }
 
@@ -58,7 +59,7 @@ public final class AtlasLayoutBuilder {
         int maxGridZ = Integer.MIN_VALUE;
 
         for (ResolvedMap map : resolved) {
-            if (map.scale() != originScale) {
+            if (map.scale() != originScale || !map.dimension().equals(origin.dimension())) {
                 continue;
             }
 
@@ -142,7 +143,7 @@ public final class AtlasLayoutBuilder {
         );
     }
 
-    private record ResolvedMap(int mapId, int centerX, int centerZ, int scale) {}
+    private record ResolvedMap(int mapId, int centerX, int centerZ, int scale, net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension) {}
 
     private record RawEntry(int mapId, int centerX, int centerZ, int scale, int mapSpan, int gridX, int gridZ) {}
 }

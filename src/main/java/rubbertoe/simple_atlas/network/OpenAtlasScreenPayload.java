@@ -18,7 +18,8 @@ public record OpenAtlasScreenPayload(
         List<AtlasContents.WaypointData> waypoints,
         int selectedWaypointIconIndex,
         int nextWaypointNumber,
-        String playerDimension
+        String playerDimension,
+        int selectedScale
 ) implements CustomPacketPayload {
 
     public static final Identifier ID = Identifier.fromNamespaceAndPath(SimpleAtlas.MOD_ID, "open_atlas_screen");
@@ -61,22 +62,33 @@ public record OpenAtlasScreenPayload(
                     AtlasContents.WaypointData::new
             );
 
-    public static final StreamCodec<RegistryFriendlyByteBuf, OpenAtlasScreenPayload> CODEC =
-            StreamCodec.composite(
-                    ByteBufCodecs.collection(ArrayList::new, TILE_CODEC),
-                    p -> new ArrayList<>(p.tiles()),
-                    ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.INT),
-                    p -> new ArrayList<>(p.atlasMapIds()),
-                    ByteBufCodecs.collection(ArrayList::new, WAYPOINT_CODEC),
-                    p -> new ArrayList<>(p.waypoints()),
-                    ByteBufCodecs.INT,
-                    OpenAtlasScreenPayload::selectedWaypointIconIndex,
-                    ByteBufCodecs.INT,
-                    OpenAtlasScreenPayload::nextWaypointNumber,
-                    ByteBufCodecs.stringUtf8(256),
-                    OpenAtlasScreenPayload::playerDimension,
-                    OpenAtlasScreenPayload::new
-            );
+    private static final StreamCodec<RegistryFriendlyByteBuf, List<AtlasTilePayload>> TILES_CODEC =
+            ByteBufCodecs.collection(ArrayList::new, TILE_CODEC);
+    private static final StreamCodec<RegistryFriendlyByteBuf, List<Integer>> MAP_IDS_CODEC =
+            ByteBufCodecs.collection(ArrayList::new, ByteBufCodecs.INT);
+    private static final StreamCodec<RegistryFriendlyByteBuf, List<AtlasContents.WaypointData>> WAYPOINTS_CODEC =
+            ByteBufCodecs.collection(ArrayList::new, WAYPOINT_CODEC);
+
+    public static final StreamCodec<RegistryFriendlyByteBuf, OpenAtlasScreenPayload> CODEC = StreamCodec.of(
+            (buf, val) -> {
+                TILES_CODEC.encode(buf, new ArrayList<>(val.tiles()));
+                MAP_IDS_CODEC.encode(buf, new ArrayList<>(val.atlasMapIds()));
+                WAYPOINTS_CODEC.encode(buf, new ArrayList<>(val.waypoints()));
+                buf.writeInt(val.selectedWaypointIconIndex());
+                buf.writeInt(val.nextWaypointNumber());
+                ByteBufCodecs.stringUtf8(256).encode(buf, val.playerDimension());
+                buf.writeInt(val.selectedScale());
+            },
+            buf -> new OpenAtlasScreenPayload(
+                    TILES_CODEC.decode(buf),
+                    MAP_IDS_CODEC.decode(buf),
+                    WAYPOINTS_CODEC.decode(buf),
+                    buf.readInt(),
+                    buf.readInt(),
+                    ByteBufCodecs.stringUtf8(256).decode(buf),
+                    buf.readInt()
+            )
+    );
 
     @Override
     public @NonNull Type<? extends CustomPacketPayload> type() {

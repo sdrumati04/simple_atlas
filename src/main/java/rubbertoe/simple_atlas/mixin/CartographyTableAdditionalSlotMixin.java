@@ -1,6 +1,7 @@
 package rubbertoe.simple_atlas.mixin;
 
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -12,7 +13,7 @@ public abstract class CartographyTableAdditionalSlotMixin {
 
     @Inject(method = "mayPlace", at = @At("HEAD"), cancellable = true)
     private void simple_atlas$allowAtlas(ItemStack itemStack, CallbackInfoReturnable<Boolean> cir) {
-        if (itemStack.is(ModItems.ATLAS)) {
+        if (itemStack.is(ModItems.ATLAS) || itemStack.is(Items.BOOK) || itemStack.is(Items.FILLED_MAP)) {
             cir.setReturnValue(true);
         }
     }

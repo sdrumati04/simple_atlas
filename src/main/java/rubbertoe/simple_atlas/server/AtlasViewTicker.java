@@ -15,6 +15,7 @@ import rubbertoe.simple_atlas.cartography.AtlasCartographyScaler;
 import rubbertoe.simple_atlas.compat.MapModCompat;
 import rubbertoe.simple_atlas.component.AtlasContents;
 import rubbertoe.simple_atlas.component.ModComponents;
+import rubbertoe.simple_atlas.item.AtlasItem;
 import rubbertoe.simple_atlas.item.ModItems;
 import rubbertoe.simple_atlas.map.AtlasMapSelector;
 
@@ -80,7 +81,8 @@ public final class AtlasViewTicker {
                 player.getX(),
                 player.getZ(),
                 contents.mapIds(),
-                preferredRawId
+                preferredRawId,
+                contents.selectedScale()
         );
         if (currentMapRawId == null) {
             return;
@@ -102,31 +104,6 @@ public final class AtlasViewTicker {
         Packet<?> augmentedPacket = AtlasWaypointDecorations.withAtlasWaypointDecorations(packet, mapData, contents, false);
         if (augmentedPacket != null) {
             player.connection.send(augmentedPacket);
-        }
-
-        if (!contents.subMapIds().isEmpty()) {
-            Integer currentSubMapRawId = AtlasMapSelector.findCurrentMapRawId(
-                    player.level(),
-                    player.getX(),
-                    player.getZ(),
-                    contents.subMapIds(),
-                    null
-            );
-            if (currentSubMapRawId != null) {
-                MapId subMapId = new MapId(currentSubMapRawId);
-                MapItemSavedData subMapData = player.level().getMapData(subMapId);
-                if (subMapData != null) {
-                    if (!subMapData.locked) {
-                        ((MapItem) Items.FILLED_MAP).update(player.level(), player, subMapData);
-                    }
-                    subMapData.getHoldingPlayer(player);
-                    MapModCompat.sendRemappedPackets(player, subMapId, subMapData);
-                    Packet<?> subPacket = subMapData.getUpdatePacket(subMapId, player);
-                    if (subPacket != null) {
-                        player.connection.send(subPacket);
-                    }
-                }
-            }
         }
     }
 }

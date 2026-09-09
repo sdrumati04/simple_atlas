@@ -1,5 +1,6 @@
 package rubbertoe.simple_atlas.network;
 
+import net.fabricmc.fabric.api.entity.event.v1.ServerEntityLevelChangeEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -21,6 +22,7 @@ import rubbertoe.simple_atlas.component.ModComponents;
 import rubbertoe.simple_atlas.config.SimpleAtlasConfigManager;
 import rubbertoe.simple_atlas.item.ModItems;
 import rubbertoe.simple_atlas.navigation.WaypointIconCatalog;
+import rubbertoe.simple_atlas.map.AtlasMapSelector;
 import rubbertoe.simple_atlas.server.AtlasWaypointDecorations;
 import rubbertoe.simple_atlas.server.AtlasViewManager;
 
@@ -36,7 +38,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ModNetworking {
     public static final int MAX_WAYPOINT_COUNT = 256;
     private static final int PINNED_WAYPOINT_RECONCILE_INTERVAL_TICKS = 20;
-    private static final Map<UUID, Set<UUID>> PINNED_NAVIGATION_IDS = new ConcurrentHashMap<>();
+    public record PinnedWaypointEntry(UUID waypointId, String dimension, BlockPos pos, int iconIndex) {}
+    private static final Map<UUID, Map<UUID, PinnedWaypointEntry>> PINNED_WAYPOINTS = new ConcurrentHashMap<>();
 
     private ModNetworking() {}
 
@@ -71,10 +74,31 @@ public final class ModNetworking {
         );
         ServerPlayNetworking.registerGlobalReceiver(
                 CloseAtlasViewPayload.TYPE,
-                (_, context) -> context.server().execute(() -> {
+                (payload, context) -> context.server().execute(() -> {
                     var player = context.player();
                     AtlasViewManager.stopViewing(player);
-                    refreshHeldAtlasWaypoints(player);
+
+                    ItemStack atlasStack = player.getMainHandItem();
+                    if (!atlasStack.is(ModItems.ATLAS)) {
+                        atlasStack = player.getOffhandItem();
+                    }
+                    if (atlasStack.is(ModItems.ATLAS)) {
+                        AtlasContents contents = atlasStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                        AtlasContents updated = contents.withSelectedScale(payload.selectedScale());
+                        atlasStack.set(ModComponents.ATLAS_CONTENTS, updated);
+
+                        Integer currentMapRawId = AtlasMapSelector.findCurrentMapRawId(
+                                player.level(),
+                                player.getX(),
+                                player.getZ(),
+                                updated.mapIds(),
+                                null,
+                                payload.selectedScale()
+                        );
+                        if (currentMapRawId != null) {
+                            atlasStack.set(DataComponents.MAP_ID, new MapId(currentMapRawId));
+                        }
+                    }
                 })
         );
         ServerPlayNetworking.registerGlobalReceiver(
@@ -112,18 +136,20 @@ public final class ModNetworking {
                     }
 
                     UUID playerId = player.getUUID();
-                    UUID newNavigationId = WaypointIconCatalog.navigationWaypointId(payload.worldX(), payload.worldZ());
+                    UUID newNavigationId = WaypointIconCatalog.navigationWaypointId(payload.dimension(), payload.worldX(), payload.worldZ());
 
-                    if (!addPinnedWaypoint(playerId, newNavigationId)) {
+                    BlockPos pos = BlockPos.containing(payload.worldX(), player.getY(), payload.worldZ());
+                    if (!addPinnedWaypoint(playerId, newNavigationId, payload.dimension(), pos, payload.waypointIconIndex())) {
                         return;
                     }
 
-                    Waypoint.Icon icon = new Waypoint.Icon();
-                    icon.style = WaypointIconCatalog.styleKeyForIndex(payload.waypointIconIndex());
-                    icon.color = Optional.of(0xFFFFFF);
-
-                    BlockPos pos = BlockPos.containing(payload.worldX(), player.getY(), payload.worldZ());
-                    sendPinnedWaypoint(player, newNavigationId, icon, pos);
+                    String currentDimension = player.level().dimension().identifier().toString();
+                    if (payload.dimension().equals(currentDimension)) {
+                        Waypoint.Icon icon = new Waypoint.Icon();
+                        icon.style = WaypointIconCatalog.styleKeyForIndex(payload.waypointIconIndex());
+                        icon.color = Optional.of(0xFFFFFF);
+                        sendPinnedWaypoint(player, newNavigationId, icon, pos);
+                    }
                     ModCriteria.WAYPOINT_PINNED_TO_LOCATOR_BAR.trigger(player);
                 })
         );
@@ -136,7 +162,7 @@ public final class ModNetworking {
                 (payload, context) -> context.server().execute(() -> {
                     var player = context.player();
                     UUID playerId = player.getUUID();
-                    UUID unpinNavigationId = WaypointIconCatalog.navigationWaypointId(payload.worldX(), payload.worldZ());
+                    UUID unpinNavigationId = WaypointIconCatalog.navigationWaypointId(payload.dimension(), payload.worldX(), payload.worldZ());
 
                     if (!removePinnedWaypoint(playerId, unpinNavigationId)) {
                         return;
@@ -172,10 +198,31 @@ public final class ModNetworking {
                 })
         );
         ServerPlayConnectionEvents.DISCONNECT.register((handler, _) ->
-                PINNED_NAVIGATION_IDS.remove(handler.player.getUUID())
+                PINNED_WAYPOINTS.remove(handler.player.getUUID())
         );
+        ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, origin, destination) -> {
+            Map<UUID, PinnedWaypointEntry> playerPins = PINNED_WAYPOINTS.get(player.getUUID());
+            if (playerPins == null || playerPins.isEmpty()) {
+                return;
+            }
+
+            String destDim = destination.dimension().identifier().toString();
+            String originDim = origin.dimension().identifier().toString();
+
+            for (PinnedWaypointEntry entry : playerPins.values()) {
+                if (entry.dimension().equals(originDim)) {
+                    sendRemovedPinnedWaypoint(player, entry.waypointId());
+                }
+                if (entry.dimension().equals(destDim)) {
+                    Waypoint.Icon icon = new Waypoint.Icon();
+                    icon.style = WaypointIconCatalog.styleKeyForIndex(entry.iconIndex());
+                    icon.color = Optional.of(0xFFFFFF);
+                    sendPinnedWaypoint(player, entry.waypointId(), icon, entry.pos());
+                }
+            }
+        });
         ServerTickEvents.END_SERVER_TICK.register(server -> {
-            if (PINNED_NAVIGATION_IDS.isEmpty()) {
+            if (PINNED_WAYPOINTS.isEmpty()) {
                 return;
             }
 
@@ -183,10 +230,10 @@ public final class ModNetworking {
                 return;
             }
 
-            for (UUID playerId : new ArrayList<>(PINNED_NAVIGATION_IDS.keySet())) {
+            for (UUID playerId : new ArrayList<>(PINNED_WAYPOINTS.keySet())) {
                 var player = server.getPlayerList().getPlayer(playerId);
                 if (player == null) {
-                    PINNED_NAVIGATION_IDS.remove(playerId);
+                    PINNED_WAYPOINTS.remove(playerId);
                     continue;
                 }
 
@@ -208,26 +255,31 @@ public final class ModNetworking {
     }
 
     private static void clearPinnedWaypoints(net.minecraft.server.level.ServerPlayer player) {
-        Set<UUID> removedNavigationIds = PINNED_NAVIGATION_IDS.remove(player.getUUID());
-        if (removedNavigationIds == null || removedNavigationIds.isEmpty()) {
+        Map<UUID, PinnedWaypointEntry> removed = PINNED_WAYPOINTS.remove(player.getUUID());
+        if (removed == null || removed.isEmpty()) {
             return;
         }
 
-        removedNavigationIds.forEach(waypointId -> sendRemovedPinnedWaypoint(player, waypointId));
+        removed.keySet().forEach(waypointId -> sendRemovedPinnedWaypoint(player, waypointId));
     }
 
-    private static boolean addPinnedWaypoint(UUID playerId, UUID waypointId) {
-        return PINNED_NAVIGATION_IDS.computeIfAbsent(playerId, _ -> new HashSet<>()).add(waypointId);
+    private static boolean addPinnedWaypoint(UUID playerId, UUID waypointId, String dimension, BlockPos pos, int iconIndex) {
+        Map<UUID, PinnedWaypointEntry> playerPins = PINNED_WAYPOINTS.computeIfAbsent(playerId, _ -> new ConcurrentHashMap<>());
+        if (playerPins.containsKey(waypointId)) {
+            return false;
+        }
+        playerPins.put(waypointId, new PinnedWaypointEntry(waypointId, dimension, pos, iconIndex));
+        return true;
     }
 
     private static boolean removePinnedWaypoint(UUID playerId, UUID waypointId) {
-        Set<UUID> pinnedIds = PINNED_NAVIGATION_IDS.get(playerId);
-        if (pinnedIds == null || !pinnedIds.remove(waypointId)) {
+        Map<UUID, PinnedWaypointEntry> playerPins = PINNED_WAYPOINTS.get(playerId);
+        if (playerPins == null || playerPins.remove(waypointId) == null) {
             return false;
         }
 
-        if (pinnedIds.isEmpty()) {
-            PINNED_NAVIGATION_IDS.remove(playerId);
+        if (playerPins.isEmpty()) {
+            PINNED_WAYPOINTS.remove(playerId);
         }
         return true;
     }
@@ -244,17 +296,17 @@ public final class ModNetworking {
             net.minecraft.server.level.ServerPlayer player,
             List<AtlasContents.WaypointData> sanitizedWaypoints
     ) {
-        Set<UUID> pinnedIds = PINNED_NAVIGATION_IDS.get(player.getUUID());
-        if (pinnedIds == null || pinnedIds.isEmpty()) {
+        Map<UUID, PinnedWaypointEntry> playerPins = PINNED_WAYPOINTS.get(player.getUUID());
+        if (playerPins == null || playerPins.isEmpty()) {
             return;
         }
 
         Set<UUID> validWaypointIds = new HashSet<>();
         for (AtlasContents.WaypointData waypoint : sanitizedWaypoints) {
-            validWaypointIds.add(WaypointIconCatalog.navigationWaypointId(waypoint.worldX(), waypoint.worldZ()));
+            validWaypointIds.add(WaypointIconCatalog.navigationWaypointId(waypoint.dimension(), waypoint.worldX(), waypoint.worldZ()));
         }
 
-        List<UUID> stalePinnedIds = pinnedIds.stream()
+        List<UUID> stalePinnedIds = playerPins.keySet().stream()
                 .filter(id -> !validWaypointIds.contains(id))
                 .toList();
         if (stalePinnedIds.isEmpty()) {
@@ -315,20 +367,8 @@ public final class ModNetworking {
             }
         }
 
-        List<Integer> updatedSubMapIds = new ArrayList<>();
-        int halfSpan = 64 << removedMapData.scale;
-        for (int subId : contents.subMapIds()) {
-            MapItemSavedData subData = player.level().getMapData(new MapId(subId));
-            if (subData != null && subData.dimension.equals(removedMapData.dimension)
-                    && Math.abs(subData.centerX - removedMapData.centerX) < halfSpan
-                    && Math.abs(subData.centerZ - removedMapData.centerZ) < halfSpan) {
-                continue;
-            }
-            updatedSubMapIds.add(subId);
-        }
-
         List<AtlasContents.WaypointData> filteredWaypoints = contents.waypoints().stream()
-                .filter(waypoint -> !isWaypointOnMap(waypoint, removedMapData))
+                .filter(waypoint -> !isWaypointOnMap(waypoint, removedMapData) || isWaypointCoveredByAnyMap(player.level(), waypoint, updatedMapIds))
                 .toList();
 
         return new AtlasContents(
@@ -336,9 +376,18 @@ public final class ModNetworking {
                 filteredWaypoints,
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
-                0,
-                updatedSubMapIds
+                contents.selectedScale()
         );
+    }
+
+    private static boolean isWaypointCoveredByAnyMap(net.minecraft.server.level.ServerLevel level, AtlasContents.WaypointData waypoint, List<Integer> remainingMapIds) {
+        for (int mapId : remainingMapIds) {
+            MapItemSavedData data = level.getMapData(new MapId(mapId));
+            if (data != null && isWaypointOnMap(waypoint, data)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isWaypointOnMap(AtlasContents.WaypointData waypoint, MapItemSavedData mapData) {
@@ -389,7 +438,7 @@ public final class ModNetworking {
         player.connection.send(packet);
     }
 
-    private static void sendImmediateWaypointRefresh(net.minecraft.server.level.ServerPlayer player, AtlasContents contents) {
+    public static void sendImmediateWaypointRefresh(net.minecraft.server.level.ServerPlayer player, AtlasContents contents) {
         Set<Integer> relevantMapIds = collectRelevantMapIds(player);
         for (int rawId : contents.mapIds()) {
             if (!relevantMapIds.isEmpty() && !relevantMapIds.contains(rawId)) {
