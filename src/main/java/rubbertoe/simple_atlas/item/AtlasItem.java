@@ -216,7 +216,7 @@ public class AtlasItem extends Item {
         // Mirror vanilla carried-map behavior so the player marker is present on the held atlas map.
         Items.FILLED_MAP.inventoryTick(stack, level, entity, slot);
 
-        // Also update sub-map if player is inside one
+        // Also update sub-map if player is inside one and sync upwards through hierarchy
         if (!contents.subMapIds().isEmpty()) {
             Integer currentSubMapRawId = AtlasMapSelector.findCurrentMapRawId(
                     level,
@@ -233,43 +233,53 @@ public class AtlasItem extends Item {
                     subMapData.tickCarriedBy(player, stack, null);
                     ((MapItem) Items.FILLED_MAP).update(level, player, subMapData);
 
-                    MapItemSavedData parentData = level.getMapData(targetId);
-                    if (parentData != null) {
-                        AtlasCartographyScaler.syncSubMapToParent(parentData, subMapData);
-                    }
+                    syncHierarchyToParents(level, player.getX(), player.getZ(), contents);
                 }
             }
         }
     }
 
+    private static void syncHierarchyToParents(ServerLevel level, double x, double z, AtlasContents contents) {
+        java.util.Map<Integer, MapItemSavedData> mapByScale = new java.util.HashMap<>();
+        for (int rawId : contents.allMapIds()) {
+            MapItemSavedData data = level.getMapData(new MapId(rawId));
+            if (data != null && data.dimension.equals(level.dimension())) {
+                int halfSpan = 64 << data.scale;
+                if (Math.abs(x - data.centerX) <= halfSpan && Math.abs(z - data.centerZ) <= halfSpan) {
+                    mapByScale.put((int) data.scale, data);
+                }
+            }
+        }
+
+        for (int s = 0; s < 4; s++) {
+            MapItemSavedData child = mapByScale.get(s);
+            MapItemSavedData parent = mapByScale.get(s + 1);
+            if (child != null && parent != null) {
+                AtlasCartographyScaler.syncSubMapToParent(parent, child);
+            }
+        }
+    }
 
     public static OpenAtlasScreenPayload createOpenPayload(ServerPlayer player, ServerLevel level, AtlasContents contents) {
         String overworldKey = net.minecraft.world.level.Level.OVERWORLD.identifier().toString();
         String playerDimension = player.level().dimension().identifier().toString();
         List<AtlasTilePayload> allTiles = new java.util.ArrayList<>();
 
-        AtlasLayout layout = AtlasLayoutBuilder.build(level, contents.mapIds());
-        for (var entry : layout.entries()) {
-            MapItemSavedData mapData = level.getMapData(new MapId(entry.mapId()));
-            String dimension = (mapData != null) ? mapData.dimension.identifier().toString() : overworldKey;
-            int scale = (mapData != null) ? mapData.scale : 1;
-            allTiles.add(new AtlasTilePayload(
-                    entry.mapId(),
-                    entry.centerX(),
-                    entry.centerZ(),
-                    entry.tileX(),
-                    entry.tileY(),
-                    dimension,
-                    scale
-            ));
+        java.util.Map<Integer, List<Integer>> mapsByScale = new java.util.TreeMap<>();
+        for (int rawId : contents.allMapIds()) {
+            MapItemSavedData mapData = level.getMapData(new MapId(rawId));
+            if (mapData != null) {
+                mapsByScale.computeIfAbsent((int) mapData.scale, _ -> new java.util.ArrayList<>()).add(rawId);
+            }
         }
 
-        if (!contents.subMapIds().isEmpty()) {
-            AtlasLayout subLayout = AtlasLayoutBuilder.build(level, contents.subMapIds());
-            for (var entry : subLayout.entries()) {
+        for (java.util.Map.Entry<Integer, List<Integer>> entryByScale : mapsByScale.entrySet()) {
+            int scale = entryByScale.getKey();
+            List<Integer> ids = entryByScale.getValue();
+            AtlasLayout layout = AtlasLayoutBuilder.build(level, ids);
+            for (var entry : layout.entries()) {
                 MapItemSavedData mapData = level.getMapData(new MapId(entry.mapId()));
                 String dimension = (mapData != null) ? mapData.dimension.identifier().toString() : overworldKey;
-                int scale = (mapData != null) ? mapData.scale : 0;
                 allTiles.add(new AtlasTilePayload(
                         entry.mapId(),
                         entry.centerX(),

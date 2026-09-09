@@ -316,11 +316,12 @@ public final class ModNetworking {
         }
 
         List<Integer> updatedSubMapIds = new ArrayList<>();
+        int halfSpan = 64 << removedMapData.scale;
         for (int subId : contents.subMapIds()) {
             MapItemSavedData subData = player.level().getMapData(new MapId(subId));
             if (subData != null && subData.dimension.equals(removedMapData.dimension)
-                    && Math.abs(subData.centerX - removedMapData.centerX) <= 64
-                    && Math.abs(subData.centerZ - removedMapData.centerZ) <= 64) {
+                    && Math.abs(subData.centerX - removedMapData.centerX) < halfSpan
+                    && Math.abs(subData.centerZ - removedMapData.centerZ) < halfSpan) {
                 continue;
             }
             updatedSubMapIds.add(subId);

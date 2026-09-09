@@ -137,7 +137,9 @@ public class AtlasScreen extends Screen {
     private float zoom = 2.0f;
     private int selectedBookmarkTab = 0;
     private int activeViewScale = 1;
+    private @Nullable Button prevScaleButton = null;
     private @Nullable Button scaleToggleButton = null;
+    private @Nullable Button nextScaleButton = null;
 
     // Waypoint draft/context menu state
     private int selectedWaypointIconIndex;
@@ -325,10 +327,19 @@ public class AtlasScreen extends Screen {
         this.atlasWaypoints = new ArrayList<>(waypoints);
         this.playerDimension = playerDimension;
         int initScale = 0;
+        boolean foundBaseScale = false;
         for (AtlasTilePayload t : this.tiles) {
-            if (t.scale() == 1) {
-                initScale = 1;
+            if (this.atlasMapIds.contains(t.mapId())) {
+                initScale = t.scale();
+                foundBaseScale = true;
                 break;
+            }
+        }
+        if (!foundBaseScale) {
+            for (AtlasTilePayload t : this.tiles) {
+                if (t.scale() > initScale) {
+                    initScale = t.scale();
+                }
             }
         }
         this.activeViewScale = initScale;
@@ -443,33 +454,7 @@ public class AtlasScreen extends Screen {
     protected void init() {
         super.init();
 
-        if (scaleToggleButton != null) {
-            this.removeWidget(scaleToggleButton);
-            scaleToggleButton = null;
-        }
-
-        if (hasMultipleScales()) {
-            AtlasViewport viewport = getAtlasViewport();
-            int btnWidth = 64;
-            int btnHeight = 16;
-            int btnX = (int) Math.floor(viewport.contentX() + 6);
-            int btnY = (int) Math.floor(viewport.contentY() + 6);
-            scaleToggleButton = this.addRenderableWidget(new AtlasTextButton(
-                    btnX,
-                    btnY,
-                    btnWidth,
-                    btnHeight,
-                    getScaleButtonMessage(),
-                    0xFFFFFFFF,
-                    0xD0181818,
-                    0xE0383838,
-                    0xFF8A8A8A,
-                    true,
-                    true,
-                    0,
-                    _ -> toggleScale()
-            ));
-        }
+        rebuildScaleWidgets();
 
         centerOnPlayerPosition();
 
@@ -485,26 +470,134 @@ public class AtlasScreen extends Screen {
         }
     }
 
-    private void toggleScale() {
-        activeViewScale = (activeViewScale == 1) ? 0 : 1;
-        if (scaleToggleButton != null) {
-            scaleToggleButton.setMessage(getScaleButtonMessage());
+    private void stepScale(int delta) {
+        List<Integer> scales = getAvailableScales();
+        if (scales.size() <= 1) {
+            return;
         }
+        int currentIdx = scales.indexOf(activeViewScale);
+        if (currentIdx < 0) {
+            currentIdx = 0;
+        }
+        int newIdx = currentIdx + delta;
+        if (newIdx >= 0 && newIdx < scales.size()) {
+            activeViewScale = scales.get(newIdx);
+            rebuildScaleWidgets();
+            centerOnSelectedDimensionAtCurrentZoom();
+        }
+    }
+
+    private void cycleScale() {
+        List<Integer> scales = getAvailableScales();
+        if (scales.size() <= 1) {
+            return;
+        }
+        int currentIdx = scales.indexOf(activeViewScale);
+        int nextIdx = (currentIdx + 1) % scales.size();
+        activeViewScale = scales.get(nextIdx);
+        rebuildScaleWidgets();
         centerOnSelectedDimensionAtCurrentZoom();
     }
 
+    private void rebuildScaleWidgets() {
+        if (prevScaleButton != null) {
+            this.removeWidget(prevScaleButton);
+            prevScaleButton = null;
+        }
+        if (scaleToggleButton != null) {
+            this.removeWidget(scaleToggleButton);
+            scaleToggleButton = null;
+        }
+        if (nextScaleButton != null) {
+            this.removeWidget(nextScaleButton);
+            nextScaleButton = null;
+        }
+
+        List<Integer> availableScales = getAvailableScales();
+        if (availableScales.size() > 1) {
+            AtlasViewport viewport = getAtlasViewport();
+            int btnY = (int) Math.floor(viewport.contentY() + 6);
+            int startX = (int) Math.floor(viewport.contentX() + 6);
+
+            int arrowBtnWidth = 16;
+            int labelBtnWidth = 64;
+            int btnHeight = 16;
+
+            int currentIdx = availableScales.indexOf(activeViewScale);
+            if (currentIdx < 0) {
+                currentIdx = 0;
+                activeViewScale = availableScales.getFirst();
+            }
+
+            final int idx = currentIdx;
+            boolean canStepDown = idx > 0;
+            boolean canStepUp = idx < availableScales.size() - 1;
+
+            prevScaleButton = this.addRenderableWidget(new AtlasTextButton(
+                    startX,
+                    btnY,
+                    arrowBtnWidth,
+                    btnHeight,
+                    Component.literal("<"),
+                    canStepDown ? 0xFFFFFFFF : 0xFF707070,
+                    0xD0181818,
+                    canStepDown ? 0xE0383838 : 0xD0181818,
+                    0xFF8A8A8A,
+                    true,
+                    true,
+                    0,
+                    _ -> stepScale(-1)
+            ));
+
+            scaleToggleButton = this.addRenderableWidget(new AtlasTextButton(
+                    startX + arrowBtnWidth + 2,
+                    btnY,
+                    labelBtnWidth,
+                    btnHeight,
+                    getScaleButtonMessage(),
+                    0xFFFFFFFF,
+                    0xD0181818,
+                    0xE0383838,
+                    0xFF8A8A8A,
+                    true,
+                    true,
+                    0,
+                    _ -> cycleScale()
+            ));
+
+            nextScaleButton = this.addRenderableWidget(new AtlasTextButton(
+                    startX + arrowBtnWidth + 2 + labelBtnWidth + 2,
+                    btnY,
+                    arrowBtnWidth,
+                    btnHeight,
+                    Component.literal(">"),
+                    canStepUp ? 0xFFFFFFFF : 0xFF707070,
+                    0xD0181818,
+                    canStepUp ? 0xE0383838 : 0xD0181818,
+                    0xFF8A8A8A,
+                    true,
+                    true,
+                    0,
+                    _ -> stepScale(1)
+            ));
+        }
+    }
+
     private Component getScaleButtonMessage() {
-        return Component.literal(activeViewScale == 1 ? "Scala 1:2" : "Scala 1:1");
+        int ratio = 1 << activeViewScale;
+        return Component.literal("Scala 1:" + ratio);
+    }
+
+    private List<Integer> getAvailableScales() {
+        return tiles.stream()
+                .map(AtlasTilePayload::scale)
+                .distinct()
+                .sorted()
+                .toList();
     }
 
     private boolean hasMultipleScales() {
-        boolean has0 = false;
-        boolean has1 = false;
-        for (AtlasTilePayload tile : tiles) {
-            if (tile.scale() == 0) has0 = true;
-            if (tile.scale() == 1) has1 = true;
-        }
-        return has0 && has1;
+        return getAvailableScales().size() > 1;
     }
 
     private record AtlasViewport(float x, float y, float width, float height, float contentX, float contentY, float contentWidth, float contentHeight) {}
@@ -2100,8 +2193,16 @@ public class AtlasScreen extends Screen {
             }
         }
 
-        if (event.button() == 0 && scaleToggleButton != null && scaleToggleButton.visible && scaleToggleButton.mouseClicked(event, doubleClick)) {
-            return true;
+        if (event.button() == 0) {
+            if (prevScaleButton != null && prevScaleButton.visible && prevScaleButton.mouseClicked(event, doubleClick)) {
+                return true;
+            }
+            if (scaleToggleButton != null && scaleToggleButton.visible && scaleToggleButton.mouseClicked(event, doubleClick)) {
+                return true;
+            }
+            if (nextScaleButton != null && nextScaleButton.visible && nextScaleButton.mouseClicked(event, doubleClick)) {
+                return true;
+            }
         }
 
         if (event.button() == 1) {

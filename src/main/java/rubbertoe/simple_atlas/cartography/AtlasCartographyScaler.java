@@ -63,11 +63,7 @@ public final class AtlasCartographyScaler {
             scaledMapIds.add(newId.id());
         }
 
-        List<Integer> subMapIds = new java.util.ArrayList<>();
-        MapItemSavedData firstOriginal = level.getMapData(new MapId(contents.mapIds().getFirst()));
-        if (firstOriginal != null && firstOriginal.scale == 0) {
-            subMapIds.addAll(contents.mapIds());
-        }
+        List<Integer> subMapIds = new java.util.ArrayList<>(contents.allMapIds());
 
         AtlasContents scaledContents = new AtlasContents(
                 List.copyOf(scaledMapIds),
@@ -85,7 +81,7 @@ public final class AtlasCartographyScaler {
             MapItemSavedData subMap,
             int quadrant
     ) {
-        if (parent == null || subMap == null || parent.scale != 1 || subMap.scale != 0) {
+        if (parent == null || subMap == null || parent.scale <= 0 || subMap.scale != parent.scale - 1) {
             return;
         }
 
@@ -120,7 +116,7 @@ public final class AtlasCartographyScaler {
     }
 
     public static void syncSubMapToParent(MapItemSavedData parent, MapItemSavedData subMap) {
-        if (parent == null || subMap == null || parent.scale != 1 || subMap.scale != 0) {
+        if (parent == null || subMap == null || parent.scale <= 0 || subMap.scale != parent.scale - 1) {
             return;
         }
         int quadrant = (subMap.centerX > parent.centerX ? 1 : 0) + (subMap.centerZ > parent.centerZ ? 2 : 0);
@@ -179,8 +175,8 @@ public final class AtlasCartographyScaler {
         }
     }
 
-    public static boolean needs1to1Exploration(MapItemSavedData parent, MapItemSavedData subMap, int quadrant) {
-        if (parent == null || subMap == null || parent.scale != 1 || subMap.scale != 0) {
+    public static boolean needsNativeExploration(MapItemSavedData parent, MapItemSavedData subMap, int quadrant) {
+        if (parent == null || subMap == null || parent.scale <= 0 || subMap.scale != parent.scale - 1) {
             return false;
         }
 
@@ -219,6 +215,10 @@ public final class AtlasCartographyScaler {
         return totalExploredPairs > 20 && identicalPairs == totalExploredPairs;
     }
 
+    public static boolean needs1to1Exploration(MapItemSavedData parent, MapItemSavedData subMap, int quadrant) {
+        return needsNativeExploration(parent, subMap, quadrant);
+    }
+
     public static void fullyExploreSubMap(ServerLevel level, ServerPlayer player, MapItemSavedData parent, MapItemSavedData subMap, int quadrant) {
         if (level == null || player == null || parent == null || subMap == null) {
             return;
@@ -247,9 +247,21 @@ public final class AtlasCartographyScaler {
 
         Vec3 origPos = player.position();
         try {
-            player.setPosRaw(subMap.centerX, origPos.y, subMap.centerZ);
-            for (int step = 0; step < 16; step++) {
-                ((MapItem) Items.FILLED_MAP).update(level, player, subMap);
+            if (subMap.scale == 0) {
+                player.setPosRaw(subMap.centerX, origPos.y, subMap.centerZ);
+                for (int step = 0; step < 16; step++) {
+                    ((MapItem) Items.FILLED_MAP).update(level, player, subMap);
+                }
+            } else {
+                int scanStep = 32 << subMap.scale;
+                int[] sDx = {-scanStep, scanStep, -scanStep, scanStep};
+                int[] sDz = {-scanStep, -scanStep, scanStep, scanStep};
+                for (int i = 0; i < 4; i++) {
+                    player.setPosRaw(subMap.centerX + sDx[i], origPos.y, subMap.centerZ + sDz[i]);
+                    for (int step = 0; step < 4; step++) {
+                        ((MapItem) Items.FILLED_MAP).update(level, player, subMap);
+                    }
+                }
             }
         } finally {
             player.setPosRaw(origPos.x, origPos.y, origPos.z);
@@ -281,19 +293,62 @@ public final class AtlasCartographyScaler {
         }
 
         MapItemSavedData first = level.getMapData(new MapId(contents.mapIds().getFirst()));
-        if (first == null || first.scale != 1) {
+        if (first == null || first.scale <= 0) {
             return contents;
         }
 
-        LinkedHashSet<Integer> resultSubMapIds = new LinkedHashSet<>();
+        int topScale = first.scale;
+        AtlasContents current = contents;
+
+        for (int tierScale = topScale; tierScale > 0; tierScale--) {
+            if (current.subMapIds().size() >= AtlasContents.HARD_MAX_SUBMAP_COUNT) {
+                break;
+            }
+
+            List<Integer> parentIds = getMapIdsForScale(level, current.allMapIds(), tierScale);
+            if (parentIds.isEmpty()) {
+                break;
+            }
+
+            if (current.subMapIds().size() + parentIds.size() * 4 > AtlasContents.HARD_MAX_SUBMAP_COUNT) {
+                break;
+            }
+
+            current = ensureSubMapsForTier(level, current, parentIds, tierScale, player);
+        }
+
+        return current;
+    }
+
+    private static List<Integer> getMapIdsForScale(ServerLevel level, List<Integer> mapIds, int targetScale) {
+        List<Integer> matching = new ArrayList<>();
+        for (int rawId : mapIds) {
+            MapItemSavedData data = level.getMapData(new MapId(rawId));
+            if (data != null && data.scale == targetScale) {
+                matching.add(rawId);
+            }
+        }
+        return matching;
+    }
+
+    private static AtlasContents ensureSubMapsForTier(
+            ServerLevel level,
+            AtlasContents contents,
+            List<Integer> parentIds,
+            int parentScale,
+            @Nullable ServerPlayer player
+    ) {
+        int childScale = parentScale - 1;
+        int step = 32 << parentScale;
+        int[] dxOffsets = {-step, step, -step, step};
+        int[] dzOffsets = {-step, -step, step, step};
+
+        LinkedHashSet<Integer> resultSubMapIds = new LinkedHashSet<>(contents.subMapIds());
         boolean changed = false;
 
-        int[] dxOffsets = {-64, 64, -64, 64};
-        int[] dzOffsets = {-64, -64, 64, 64};
-
-        for (int parentRawId : contents.mapIds()) {
+        for (int parentRawId : parentIds) {
             MapItemSavedData parent = level.getMapData(new MapId(parentRawId));
-            if (parent == null || parent.scale != 1) {
+            if (parent == null || parent.scale != parentScale) {
                 continue;
             }
 
@@ -304,10 +359,10 @@ public final class AtlasCartographyScaler {
                 Integer matchingSubId = null;
                 MapItemSavedData matchingSubData = null;
 
-                for (int subRawId : contents.subMapIds()) {
+                for (int subRawId : resultSubMapIds) {
                     MapItemSavedData subData = level.getMapData(new MapId(subRawId));
                     if (subData != null
-                            && subData.scale == 0
+                            && subData.scale == childScale
                             && subData.dimension.equals(parent.dimension)
                             && subData.centerX == targetX
                             && subData.centerZ == targetZ) {
@@ -323,7 +378,7 @@ public final class AtlasCartographyScaler {
                     matchingSubData = MapItemSavedData.createFresh(
                             targetX,
                             targetZ,
-                            (byte) 0,
+                            (byte) childScale,
                             true,
                             false,
                             parent.dimension
@@ -356,7 +411,6 @@ public final class AtlasCartographyScaler {
                             int parentPz = parentStartZ + (subZ / 2);
                             int pRem = MapModCompat.getRemappedColor(parent, parentPx, parentPz);
                             int sRem = MapModCompat.getRemappedColor(matchingSubData, subX, subZ);
-                            // If parent has a non-black color, but submap pixel is black (0 or #000000)
                             if ((pRem & 0xFFFFFF) != 0 && (sRem & 0xFFFFFF) == 0 && matchingSubData.colors[subX + subZ * MAP_SIZE] != 0) {
                                 corruptedBlackDots++;
                             }
@@ -384,33 +438,8 @@ public final class AtlasCartographyScaler {
                     matchingSubData.setDirty();
                 }
 
-                if (player != null && level.dimension().equals(parent.dimension) && needs1to1Exploration(parent, matchingSubData, q)) {
+                if (player != null && level.dimension().equals(parent.dimension) && needsNativeExploration(parent, matchingSubData, q)) {
                     fullyExploreSubMap(level, player, parent, matchingSubData, q);
-                }
-            }
-        }
-
-        // Also preserve any existing submaps that belong to other valid finer maps
-        for (int subRawId : contents.subMapIds()) {
-            if (!resultSubMapIds.contains(subRawId)) {
-                MapItemSavedData subData = level.getMapData(new MapId(subRawId));
-                if (subData != null && subData.scale == 0) {
-                    boolean duplicateCoord = false;
-                    for (int existingId : resultSubMapIds) {
-                        MapItemSavedData existingData = level.getMapData(new MapId(existingId));
-                        if (existingData != null
-                                && existingData.dimension.equals(subData.dimension)
-                                && existingData.centerX == subData.centerX
-                                && existingData.centerZ == subData.centerZ) {
-                            duplicateCoord = true;
-                            break;
-                        }
-                    }
-                    if (!duplicateCoord) {
-                        resultSubMapIds.add(subRawId);
-                    } else {
-                        changed = true;
-                    }
                 }
             }
         }
@@ -531,7 +560,7 @@ public final class AtlasCartographyScaler {
                     && existing.scale == originData.scale) {
                 projectKnownPixelsIntoScaledMap(finerData, existing);
                 // Do NOT apply jagged edge effect when merging a finer-scale map into an atlas tile
-                if (finerData.scale == 0 && !contents.subMapIds().contains(finerId.id())) {
+                if (finerData.scale < originData.scale && !contents.subMapIds().contains(finerId.id())) {
                     var newSubs = new java.util.LinkedHashSet<>(contents.subMapIds());
                     newSubs.add(finerId.id());
                     return contents.withSubMaps(List.copyOf(newSubs));
@@ -550,7 +579,7 @@ public final class AtlasCartographyScaler {
         MapId newId = level.getFreeMapId();
         level.setMapData(newId, atlasCell);
         AtlasContents updated = contents.withAdded(newId.id());
-        if (finerData.scale == 0 && !updated.subMapIds().contains(finerId.id())) {
+        if (finerData.scale < originData.scale && !updated.subMapIds().contains(finerId.id())) {
             var newSubs = new java.util.LinkedHashSet<>(updated.subMapIds());
             newSubs.add(finerId.id());
             updated = updated.withSubMaps(List.copyOf(newSubs));

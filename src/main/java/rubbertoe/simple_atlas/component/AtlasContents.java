@@ -13,6 +13,7 @@ import java.util.SequencedSet;
 
 public final class AtlasContents {
     public static final int HARD_MAX_ATLAS_MAP_COUNT = SimpleAtlasConfig.MAX_ATLAS_MAP_COUNT;
+    public static final int HARD_MAX_SUBMAP_COUNT = HARD_MAX_ATLAS_MAP_COUNT * 4;
     public static final AtlasContents EMPTY = new AtlasContents(List.of(), List.of(), 0, 1, 0, List.of());
     public static final String DEFAULT_DIMENSION = "minecraft:overworld";
 
@@ -83,7 +84,7 @@ public final class AtlasContents {
             List<Integer> subMapIds
     ) {
         this.mapIdSet = cappedMapIdSet(mapIds);
-        this.subMapIdSet = cappedMapIdSet(subMapIds);
+        this.subMapIdSet = cappedSubMapIdSet(subMapIds);
         this.waypoints = List.copyOf(waypoints);
         this.selectedWaypointIconIndex = Math.max(0, selectedWaypointIconIndex);
         this.nextWaypointNumber = Math.max(1, nextWaypointNumber);
@@ -196,6 +197,22 @@ public final class AtlasContents {
 
     private static int configuredMapLimit() {
         return Math.min(SimpleAtlasConfigManager.getMaxAtlasMapCount(), HARD_MAX_ATLAS_MAP_COUNT);
+    }
+
+    private static SequencedSet<Integer> cappedSubMapIdSet(List<Integer> subMapIds) {
+        int limit = configuredSubMapLimit();
+        LinkedHashSet<Integer> capped = new LinkedHashSet<>();
+        for (int mapId : subMapIds) {
+            if (capped.size() >= limit) {
+                break;
+            }
+            capped.add(mapId);
+        }
+        return capped;
+    }
+
+    private static int configuredSubMapLimit() {
+        return Math.min(SimpleAtlasConfigManager.getMaxAtlasMapCount() * 4, HARD_MAX_SUBMAP_COUNT);
     }
 
     @Override
