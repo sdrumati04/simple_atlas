@@ -81,14 +81,33 @@ public abstract class CartographyTableMenuMixin {
                     return;
                 }
 
-                // Can add map of ANY scale (0..4) as long as not duplicate and atlas has room
+                // If atlas already contains maps, enforce same scale:
+                if (!contents.mapIds().isEmpty()) {
+                    int existingScale = -1;
+                    for (int existingRawId : contents.mapIds()) {
+                        MapItemSavedData d = level.getMapData(new MapId(existingRawId));
+                        if (d != null) {
+                            existingScale = d.scale;
+                            break;
+                        }
+                    }
+                    if (existingScale >= 0 && newMapData.scale != existingScale) {
+                        simple_atlas$rejectAtlasResult();
+                        return;
+                    }
+                }
+
                 if (!contents.canAddMapId() || contents.contains(mapId.id())) {
                     simple_atlas$rejectAtlasResult();
                     return;
                 }
 
                 ItemStack result = atlasInput.copyWithCount(1);
-                result.set(ModComponents.ATLAS_CONTENTS, contents.withAdded(mapId.id()));
+                AtlasContents updatedContents = contents.withAdded(mapId.id());
+                if (contents.mapIds().isEmpty() || contents.selectedScale() < 0) {
+                    updatedContents = updatedContents.withSelectedScale(newMapData.scale);
+                }
+                result.set(ModComponents.ATLAS_CONTENTS, updatedContents);
 
                 if (!ItemStack.matches(result, resultStack)) {
                     this.resultContainer.setItem(2, result);
@@ -100,7 +119,7 @@ public abstract class CartographyTableMenuMixin {
             return;
         }
 
-        // ── Atlas + paper → scale every atlas map by +1 (deduped on take) ─────
+        // ── Atlas + paper → scale atlas maps by +1 (replaces lower-scale maps) ─
         boolean isAtlasAndPaper = (mapStack.is(ModItems.ATLAS) && additionalStack.is(Items.PAPER))
                 || (mapStack.is(Items.PAPER) && additionalStack.is(ModItems.ATLAS));
         if (isAtlasAndPaper) {
@@ -125,28 +144,71 @@ public abstract class CartographyTableMenuMixin {
             return;
         }
 
-        // ── Atlas + atlas → merge contents (no size check required) ──────────
+        // ── Atlas + shears → downscale atlas maps by -1 ─────────────────────
+        boolean isAtlasAndShears = (mapStack.is(ModItems.ATLAS) && additionalStack.is(Items.SHEARS))
+                || (mapStack.is(Items.SHEARS) && additionalStack.is(ModItems.ATLAS));
+        if (isAtlasAndShears) {
+            ItemStack atlasInput = mapStack.is(ModItems.ATLAS) ? mapStack : additionalStack;
+            AtlasContents contents = atlasInput.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+
+            this.access.execute((level, _) -> {
+                if (!(level instanceof ServerLevel serverLevel)
+                        || !AtlasCartographyScaler.canDownscaleAtlas(serverLevel, contents)) {
+                    simple_atlas$rejectAtlasResult();
+                    return;
+                }
+
+                ItemStack result = atlasInput.copyWithCount(1);
+                if (!ItemStack.matches(result, resultStack)) {
+                    this.resultContainer.setItem(2, result);
+                    ((CartographyTableMenu) (Object) this).broadcastChanges();
+                }
+            });
+
+            ci.cancel();
+            return;
+        }
+
+        // ── Atlas + atlas → merge contents (matching scale required) ─────────
         if (mapStack.is(ModItems.ATLAS) && additionalStack.is(ModItems.ATLAS)) {
             AtlasContents topContents = mapStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
             AtlasContents bottomContents = additionalStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
-            LinkedHashSet<Integer> mergedMapIds = new LinkedHashSet<>(bottomContents.mapIds());
-            mergedMapIds.addAll(topContents.mapIds());
-            int mergedMapCount = mergedMapIds.size();
-            if (mergedMapCount > SimpleAtlasConfigManager.getMaxAtlasMapCount()) {
-                simple_atlas$rejectAtlasResult();
-                ci.cancel();
-                return;
-            }
+            this.access.execute((level, _) -> {
+                if (!topContents.mapIds().isEmpty() && !bottomContents.mapIds().isEmpty()) {
+                    int topScale = -1;
+                    for (int id : topContents.mapIds()) {
+                        MapItemSavedData d = level.getMapData(new MapId(id));
+                        if (d != null) { topScale = d.scale; break; }
+                    }
+                    int bottomScale = -1;
+                    for (int id : bottomContents.mapIds()) {
+                        MapItemSavedData d = level.getMapData(new MapId(id));
+                        if (d != null) { bottomScale = d.scale; break; }
+                    }
+                    if (topScale >= 0 && bottomScale >= 0 && topScale != bottomScale) {
+                        simple_atlas$rejectAtlasResult();
+                        return;
+                    }
+                }
 
-            AtlasContents merged = simple_atlas$mergeAtlasContents(bottomContents, topContents);
-            ItemStack result = additionalStack.copyWithCount(1);
-            result.set(ModComponents.ATLAS_CONTENTS, merged);
+                LinkedHashSet<Integer> mergedMapIds = new LinkedHashSet<>(bottomContents.mapIds());
+                mergedMapIds.addAll(topContents.mapIds());
+                int mergedMapCount = mergedMapIds.size();
+                if (mergedMapCount > SimpleAtlasConfigManager.getMaxAtlasMapCount()) {
+                    simple_atlas$rejectAtlasResult();
+                    return;
+                }
 
-            if (!ItemStack.matches(result, resultStack)) {
-                this.resultContainer.setItem(2, result);
-                ((CartographyTableMenu) (Object) this).broadcastChanges();
-            }
+                AtlasContents merged = simple_atlas$mergeAtlasContents(bottomContents, topContents);
+                ItemStack result = additionalStack.copyWithCount(1);
+                result.set(ModComponents.ATLAS_CONTENTS, merged);
+
+                if (!ItemStack.matches(result, resultStack)) {
+                    this.resultContainer.setItem(2, result);
+                    ((CartographyTableMenu) (Object) this).broadcastChanges();
+                }
+            });
 
             ci.cancel();
             return;
@@ -212,6 +274,18 @@ public abstract class CartographyTableMenuMixin {
                 }
             }
 
+            // Handle scale down (Shears):
+            boolean isDownscale = (slot0.is(ModItems.ATLAS) && slot1.is(Items.SHEARS))
+                    || (slot0.is(Items.SHEARS) && slot1.is(ModItems.ATLAS));
+            if (isDownscale && player instanceof ServerPlayer serverPlayer) {
+                ItemStack atlas = slot0.is(ModItems.ATLAS) ? slot0 : slot1;
+                AtlasContents original = atlas.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                AtlasContents downscaled = AtlasCartographyScaler.downscaleAtlas(serverPlayer.level(), original);
+                if (downscaled != null) {
+                    stack.set(ModComponents.ATLAS_CONTENTS, downscaled);
+                }
+            }
+
             // Move to player inventory
             if (!((AbstractContainerMenuInvoker) this).simple_atlas$invokeMoveItemStackTo(stack, 3, 39, true)) {
                 cir.setReturnValue(ItemStack.EMPTY);
@@ -237,52 +311,75 @@ public abstract class CartographyTableMenuMixin {
             return;
         }
 
-        // ── Book from inventory → slot 0 ──────────────────────────────────────
-        if (stack.is(Items.BOOK) && slotIndex >= 3 && slotIndex < 39) {
-            if (((AbstractContainerMenuInvoker) this).simple_atlas$invokeMoveItemStackTo(stack, 0, 1, false)) {
-                if (stack.isEmpty()) {
-                    slot.setByPlayer(ItemStack.EMPTY);
-                }
-
-                slot.setChanged();
-
-                if (stack.getCount() == clicked.getCount()) {
-                    cir.setReturnValue(ItemStack.EMPTY);
+        if (slotIndex >= 3 && slotIndex < 39) {
+            if (stack.is(ModItems.ATLAS)) {
+                if (simple_atlas$moveStackToSlots(slot, stack, clicked, player, cir, 0, 1, 1, 2)) {
                     return;
                 }
+            }
 
-                slot.onTake(player, stack);
-                ((AbstractContainerMenuInvoker) this).simple_atlas$invokeBroadcastChanges();
-                cir.setReturnValue(clicked);
-                return;
+            if (stack.is(Items.SHEARS)) {
+                if (simple_atlas$moveStackToSlots(slot, stack, clicked, player, cir, 1, 2, 0, 1)) {
+                    return;
+                }
+            }
+
+            if (stack.is(Items.PAPER)) {
+                if (simple_atlas$moveStackToSlots(slot, stack, clicked, player, cir, 1, 2, 0, 1)) {
+                    return;
+                }
+            }
+
+            if (stack.is(Items.BOOK)) {
+                if (simple_atlas$moveStackToSlots(slot, stack, clicked, player, cir, 0, 1, 1, 2)) {
+                    return;
+                }
+            }
+
+            if (stack.is(Items.FILLED_MAP)) {
+                if (simple_atlas$moveStackToSlots(slot, stack, clicked, player, cir, 0, 1, 1, 2)) {
+                    return;
+                }
             }
         }
+    }
 
-        // ── Atlas from inventory → slot 1, otherwise slot 0 (for atlas merge) ─
-        if (stack.is(ModItems.ATLAS) && slotIndex >= 3 && slotIndex < 39) {
-            boolean movedToAdditional = ((AbstractContainerMenuInvoker) this).simple_atlas$invokeMoveItemStackTo(stack, 1, 2, false);
-            boolean movedToTop = movedToAdditional
-                    || ((AbstractContainerMenuInvoker) this).simple_atlas$invokeMoveItemStackTo(stack, 0, 1, false);
-
-            if (!movedToTop) {
-                cir.setReturnValue(ItemStack.EMPTY);
-                return;
-            }
-
-            if (stack.isEmpty()) {
-                slot.setByPlayer(ItemStack.EMPTY);
-            }
-
-            slot.setChanged();
-
-            if (stack.getCount() == clicked.getCount()) {
-                cir.setReturnValue(ItemStack.EMPTY);
-                return;
-            }
-
-            slot.onTake(player, stack);
-            ((AbstractContainerMenuInvoker) this).simple_atlas$invokeBroadcastChanges();
-            cir.setReturnValue(clicked);
+    @Unique
+    private boolean simple_atlas$moveStackToSlots(
+            Slot slot,
+            ItemStack stack,
+            ItemStack clicked,
+            Player player,
+            CallbackInfoReturnable<ItemStack> cir,
+            int firstSlotPrimary,
+            int lastSlotPrimary,
+            int firstSlotSecondary,
+            int lastSlotSecondary
+    ) {
+        boolean moved = ((AbstractContainerMenuInvoker) this).simple_atlas$invokeMoveItemStackTo(stack, firstSlotPrimary, lastSlotPrimary, false);
+        if (!moved && firstSlotSecondary >= 0) {
+            moved = ((AbstractContainerMenuInvoker) this).simple_atlas$invokeMoveItemStackTo(stack, firstSlotSecondary, lastSlotSecondary, false);
         }
+
+        if (!moved) {
+            cir.setReturnValue(ItemStack.EMPTY);
+            return true;
+        }
+
+        if (stack.isEmpty()) {
+            slot.setByPlayer(ItemStack.EMPTY);
+        }
+
+        slot.setChanged();
+
+        if (stack.getCount() == clicked.getCount()) {
+            cir.setReturnValue(ItemStack.EMPTY);
+            return true;
+        }
+
+        slot.onTake(player, stack);
+        ((AbstractContainerMenuInvoker) this).simple_atlas$invokeBroadcastChanges();
+        cir.setReturnValue(clicked);
+        return true;
     }
 }

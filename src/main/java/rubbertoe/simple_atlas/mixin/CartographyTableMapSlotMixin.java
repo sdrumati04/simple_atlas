@@ -19,12 +19,10 @@ public abstract class CartographyTableMapSlotMixin {
 
     @Inject(method = "mayPlace", at = @At("HEAD"), cancellable = true)
     private void simple_atlas$allowAtlasInputs(ItemStack itemStack, CallbackInfoReturnable<Boolean> cir) {
-        if (itemStack.is(Items.BOOK)) {
-            cir.setReturnValue(true);
-            return;
-        }
-
-        if (itemStack.is(ModItems.ATLAS)) {
+        if (itemStack.is(Items.BOOK)
+                || itemStack.is(ModItems.ATLAS)
+                || itemStack.is(Items.SHEARS)
+                || itemStack.is(Items.PAPER)) {
             cir.setReturnValue(true);
         }
     }

@@ -7,7 +7,10 @@ import com.google.common.collect.Multisets;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundMapItemDataPacket;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -15,11 +18,13 @@ import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.MapColor;
+import net.minecraft.world.level.saveddata.maps.MapDecoration;
 import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 import org.jspecify.annotations.Nullable;
 import rubbertoe.simple_atlas.compat.MapModCompat;
 import rubbertoe.simple_atlas.component.AtlasContents;
+import rubbertoe.simple_atlas.config.SimpleAtlasConfigManager;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 public final class AtlasCartographyScaler {
     private static final int MAP_SIZE = 128;
@@ -46,8 +52,6 @@ public final class AtlasCartographyScaler {
         }
 
         // Determine the highest scale present in the atlas that can still be scaled (< MAX_SCALE).
-        // This ensures successive paper additions progressively create the next overview tier:
-        // Scale 0 -> Scale 1, then Scale 1 -> Scale 2, etc.
         int targetScale = -1;
         for (int rawId : contents.mapIds()) {
             MapItemSavedData mapData = level.getMapData(new MapId(rawId));
@@ -84,10 +88,6 @@ public final class AtlasCartographyScaler {
             return null;
         }
 
-        if (!contents.canAddMapCount(scaledByKey.size())) {
-            return null;
-        }
-
         LinkedHashSet<Integer> newMapIds = new LinkedHashSet<>();
         for (Map.Entry<ScaledMapKey, MapItemSavedData> entry : scaledByKey.entrySet()) {
             ScaledMapKey key = entry.getKey();
@@ -113,11 +113,27 @@ public final class AtlasCartographyScaler {
             newMapIds.add(newId.id());
         }
 
-        return contents.withAddedAll(newMapIds);
+        LinkedHashSet<Integer> resultingIds = new LinkedHashSet<>();
+        for (int rawId : contents.mapIds()) {
+            MapItemSavedData d = level.getMapData(new MapId(rawId));
+            if (d != null && d.scale != targetScale) {
+                resultingIds.add(rawId);
+            }
+        }
+        resultingIds.addAll(newMapIds);
+
+        return new AtlasContents(
+                List.copyOf(resultingIds),
+                contents.waypoints(),
+                contents.selectedWaypointIconIndex(),
+                contents.nextWaypointNumber(),
+                0,
+                targetScale + 1
+        );
     }
 
     private static boolean validateScaleInputs(ServerLevel level, AtlasContents contents) {
-        if (contents.mapIds().isEmpty() || !contents.canAddMapId()) {
+        if (contents.mapIds().isEmpty()) {
             return false;
         }
 
@@ -129,6 +145,223 @@ public final class AtlasCartographyScaler {
         }
 
         return false;
+    }
+
+    // ----- Atlas-wide downscale (Shears + Atlas) -----
+
+    public static boolean canDownscaleAtlas(ServerLevel level, AtlasContents contents) {
+        if (contents.mapIds().isEmpty()) {
+            return false;
+        }
+
+        int targetScale = -1;
+        for (int rawId : contents.mapIds()) {
+            MapItemSavedData mapData = level.getMapData(new MapId(rawId));
+            if (mapData != null && !mapData.locked && mapData.scale > 0) {
+                if (targetScale < 0 || mapData.scale < targetScale) {
+                    targetScale = mapData.scale;
+                }
+            }
+        }
+
+        if (targetScale <= 0) {
+            return false;
+        }
+
+        int maxMaps = SimpleAtlasConfigManager.getMaxAtlasMapCount();
+        int estimatedNewMaps = 0;
+        for (int rawId : contents.mapIds()) {
+            MapItemSavedData mapData = level.getMapData(new MapId(rawId));
+            if (mapData != null && mapData.scale == targetScale) {
+                for (int qz = 0; qz < 2; qz++) {
+                    for (int qx = 0; qx < 2; qx++) {
+                        if (hasExploredPixelsInQuadrant(mapData, qx, qz)) {
+                            estimatedNewMaps++;
+                        }
+                    }
+                }
+            } else {
+                estimatedNewMaps++;
+            }
+        }
+
+        return estimatedNewMaps > 0 && estimatedNewMaps <= maxMaps;
+    }
+
+    private static boolean hasExploredPixelsInQuadrant(MapItemSavedData data, int qx, int qz) {
+        for (int y = qz * 64; y < (qz + 1) * 64; y++) {
+            for (int x = qx * 64; x < (qx + 1) * 64; x++) {
+                if (data.colors[x + y * MAP_SIZE] != 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public static @Nullable AtlasContents downscaleAtlas(ServerLevel level, AtlasContents contents) {
+        if (!canDownscaleAtlas(level, contents)) {
+            return null;
+        }
+
+        int targetScale = -1;
+        for (int rawId : contents.mapIds()) {
+            MapItemSavedData mapData = level.getMapData(new MapId(rawId));
+            if (mapData != null && !mapData.locked && mapData.scale > 0) {
+                if (targetScale < 0 || mapData.scale < targetScale) {
+                    targetScale = mapData.scale;
+                }
+            }
+        }
+
+        if (targetScale <= 0) {
+            return null;
+        }
+
+        int childScale = targetScale - 1;
+        int childScaleFactor = 1 << childScale;
+        int childSpan = 128 * childScaleFactor;
+        int parentScaleFactor = 1 << targetScale;
+        int parentSpan = 128 * parentScaleFactor;
+
+        boolean hasRemapped = MapModCompat.isRemappedLoaded();
+        LinkedHashMap<ScaledMapKey, MapItemSavedData> childMapsByKey = new LinkedHashMap<>();
+
+        for (int rawId : contents.mapIds()) {
+            MapItemSavedData mapData = level.getMapData(new MapId(rawId));
+            if (mapData == null || mapData.locked || mapData.scale != targetScale) {
+                continue;
+            }
+
+            int parentMinX = mapData.centerX - parentSpan / 2;
+            int parentMinZ = mapData.centerZ - parentSpan / 2;
+
+            ArrayList<Integer> parentRem = hasRemapped ? MapModCompat.getRemappedColors(mapData) : null;
+
+            for (int iz = 0; iz < 2; iz++) {
+                for (int ix = 0; ix < 2; ix++) {
+                    if (!hasExploredPixelsInQuadrant(mapData, ix, iz)) {
+                        continue;
+                    }
+
+                    int childMinX = parentMinX + ix * childSpan;
+                    int childMinZ = parentMinZ + iz * childSpan;
+                    int childCenterX = childMinX + childSpan / 2;
+                    int childCenterZ = childMinZ + childSpan / 2;
+
+                    ScaledMapKey key = new ScaledMapKey(mapData.dimension, childCenterX, childCenterZ, (byte) childScale);
+                    MapItemSavedData childData = childMapsByKey.get(key);
+                    if (childData == null) {
+                        childData = MapItemSavedData.createFresh(
+                                childCenterX,
+                                childCenterZ,
+                                (byte) childScale,
+                                true,
+                                false,
+                                mapData.dimension
+                        );
+                        childMapsByKey.put(key, childData);
+                    }
+
+                    boolean[] coverageOnChild = new boolean[MAP_PIXEL_COUNT];
+                    boolean hasChildCoverage = false;
+                    ArrayList<Integer> childRem = hasRemapped ? MapModCompat.getRemappedColors(childData) : null;
+                    if (hasRemapped && childRem == null) {
+                        childRem = new ArrayList<>(Collections.nCopies(MAP_PIXEL_COUNT, 0));
+                    }
+
+                    for (int cy = 0; cy < MAP_SIZE; cy++) {
+                        for (int cx = 0; cx < MAP_SIZE; cx++) {
+                            double worldX = childMinX + (cx + 0.5) * childScaleFactor;
+                            double worldZ = childMinZ + (cy + 0.5) * childScaleFactor;
+
+                            int parentX = (int) Math.floor((worldX - parentMinX) / parentScaleFactor);
+                            int parentY = (int) Math.floor((worldZ - parentMinZ) / parentScaleFactor);
+
+                            if (parentX >= 0 && parentX < MAP_SIZE && parentY >= 0 && parentY < MAP_SIZE) {
+                                int parentIdx = parentX + parentY * MAP_SIZE;
+                                byte parentColor = mapData.colors[parentIdx];
+                                if (parentColor != 0) {
+                                    int childIdx = cx + cy * MAP_SIZE;
+                                    coverageOnChild[childIdx] = true;
+                                    hasChildCoverage = true;
+                                    childData.setColor(cx, cy, parentColor);
+                                    if (hasRemapped && parentRem != null && parentIdx < parentRem.size() && childRem != null) {
+                                        int remVal = parentRem.get(parentIdx);
+                                        if (remVal != 0) {
+                                            childRem.set(childIdx, remVal);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (hasChildCoverage) {
+                        ServerLevel mapLevel = level.getServer().getLevel(mapData.dimension);
+                        if (mapLevel == null) {
+                            mapLevel = level;
+                        }
+                        scanWorldBlocksForScaledMap(mapLevel, childData, coverageOnChild, childRem);
+                    }
+
+                    if (childRem != null) {
+                        MapModCompat.setRemappedColors(childData, childRem);
+                    }
+                }
+            }
+        }
+
+        if (childMapsByKey.isEmpty()) {
+            return null;
+        }
+
+        int maxMaps = SimpleAtlasConfigManager.getMaxAtlasMapCount();
+        LinkedHashSet<Integer> newMapIds = new LinkedHashSet<>();
+
+        for (MapItemSavedData childData : childMapsByKey.values()) {
+            MapId newId = level.getFreeMapId();
+            level.setMapData(newId, childData);
+            childData.setDirty();
+            newMapIds.add(newId.id());
+        }
+
+        LinkedHashSet<Integer> resultingIds = new LinkedHashSet<>();
+        for (int rawId : contents.mapIds()) {
+            MapItemSavedData d = level.getMapData(new MapId(rawId));
+            if (d != null && d.scale != targetScale) {
+                resultingIds.add(rawId);
+            }
+        }
+        resultingIds.addAll(newMapIds);
+
+        if (resultingIds.size() > maxMaps) {
+            return null;
+        }
+
+        return new AtlasContents(
+                List.copyOf(resultingIds),
+                contents.waypoints(),
+                contents.selectedWaypointIconIndex(),
+                contents.nextWaypointNumber(),
+                0,
+                childScale
+        );
+    }
+
+    private static void sendMapSyncPacket(ServerPlayer player, MapId mapId, MapItemSavedData mapData) {
+        mapData.getHoldingPlayer(player);
+        List<MapDecoration> currentDecorations = new ArrayList<>();
+        mapData.getDecorations().forEach(currentDecorations::add);
+        Packet<?> packet = new ClientboundMapItemDataPacket(
+                mapId,
+                mapData.scale,
+                mapData.locked,
+                Optional.of(currentDecorations),
+                Optional.of(new MapItemSavedData.MapPatch(0, 0, MAP_SIZE, MAP_SIZE, mapData.colors))
+        );
+        player.connection.send(packet);
+        MapModCompat.sendRemappedPackets(player, mapId, mapData);
     }
 
     // ----- High-fidelity modal downsampling buffer -----

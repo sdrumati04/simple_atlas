@@ -28,6 +28,20 @@ public final class AtlasMapSelector {
             @Nullable Integer preferredRawId,
             int preferredScale
     ) {
+        // If preferredScale is not set (< 0), default to the most detailed scale present in this dimension
+        if (preferredScale < 0 && !mapIds.isEmpty()) {
+            int minScale = Integer.MAX_VALUE;
+            for (int rawId : mapIds) {
+                MapItemSavedData data = level.getMapData(new MapId(rawId));
+                if (data != null && data.dimension.equals(level.dimension()) && data.scale < minScale) {
+                    minScale = data.scale;
+                }
+            }
+            if (minScale != Integer.MAX_VALUE) {
+                preferredScale = minScale;
+            }
+        }
+
         if (preferredRawId != null && mapIds.contains(preferredRawId)) {
             MapItemSavedData prefData = level.getMapData(new MapId(preferredRawId));
             if (mapContainsPosition(level, x, z, prefData)) {
@@ -38,10 +52,11 @@ public final class AtlasMapSelector {
         }
 
         Integer bestMapId = null;
-        int bestScaleFactor = Integer.MAX_VALUE;
         double bestCenterDistanceSq = Double.MAX_VALUE;
 
-        // If preferredScale is specified, first search for a matching map covering the position
+        // Strictly search for a matching map covering the position at preferredScale ONLY.
+        // If the player enters a zone not mapped at this scale, return null so the atlas
+        // displays as the book rather than switching to an unexpected higher scale.
         if (preferredScale >= 0) {
             for (int rawId : mapIds) {
                 MapItemSavedData mapData = level.getMapData(new MapId(rawId));
@@ -58,32 +73,10 @@ public final class AtlasMapSelector {
                     }
                 }
             }
-            if (bestMapId != null) {
-                return bestMapId;
-            }
+            return bestMapId;
         }
 
-        // Fallback: prefer the most detailed map when coverage overlaps.
-        for (int rawId : mapIds) {
-            MapItemSavedData mapData = level.getMapData(new MapId(rawId));
-            if (!mapContainsPosition(level, x, z, mapData)) {
-                continue;
-            }
-
-            double dx = x - mapData.centerX;
-            double dz = z - mapData.centerZ;
-            double centerDistanceSq = dx * dx + dz * dz;
-            int scaleFactor = 1 << mapData.scale;
-
-            if (scaleFactor < bestScaleFactor
-                    || (scaleFactor == bestScaleFactor && centerDistanceSq < bestCenterDistanceSq)) {
-                bestMapId = rawId;
-                bestScaleFactor = scaleFactor;
-                bestCenterDistanceSq = centerDistanceSq;
-            }
-        }
-
-        return bestMapId;
+        return null;
     }
 
     private static boolean mapContainsPosition(Level level, double x, double z, @Nullable MapItemSavedData mapData) {

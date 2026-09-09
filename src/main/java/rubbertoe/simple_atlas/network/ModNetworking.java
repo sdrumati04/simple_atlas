@@ -97,6 +97,8 @@ public final class ModNetworking {
                         );
                         if (currentMapRawId != null) {
                             atlasStack.set(DataComponents.MAP_ID, new MapId(currentMapRawId));
+                        } else {
+                            atlasStack.remove(DataComponents.MAP_ID);
                         }
                     }
                 })
