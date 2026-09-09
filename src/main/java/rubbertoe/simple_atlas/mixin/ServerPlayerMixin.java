@@ -42,13 +42,14 @@ public abstract class ServerPlayerMixin {
         }
 
         AtlasContents contents = itemStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+        mapData.getHoldingPlayer(player);
+        MapModCompat.sendRemappedPackets(player, mapId, mapData);
         Packet<?> packet = mapData.getUpdatePacket(mapId, player);
         boolean includeAtlasWaypoints = !AtlasViewManager.isViewing(player);
         Packet<?> augmentedPacket = AtlasWaypointDecorations.withAtlasWaypointDecorations(packet, mapData, contents, includeAtlasWaypoints);
         if (augmentedPacket != null) {
             player.connection.send(augmentedPacket);
         }
-        MapModCompat.sendRemappedPackets(player, mapId, mapData);
 
         if (!contents.subMapIds().isEmpty()) {
             Integer currentSubMapRawId = AtlasMapSelector.findCurrentMapRawId(
@@ -63,11 +64,11 @@ public abstract class ServerPlayerMixin {
                 MapItemSavedData subMapData = player.level().getMapData(subMapId);
                 if (subMapData != null) {
                     subMapData.getHoldingPlayer(player);
+                    MapModCompat.sendRemappedPackets(player, subMapId, subMapData);
                     Packet<?> subPacket = subMapData.getUpdatePacket(subMapId, player);
                     if (subPacket != null) {
                         player.connection.send(subPacket);
                     }
-                    MapModCompat.sendRemappedPackets(player, subMapId, subMapData);
                 }
             }
         }

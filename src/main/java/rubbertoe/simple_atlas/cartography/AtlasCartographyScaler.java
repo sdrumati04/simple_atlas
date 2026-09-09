@@ -1,9 +1,14 @@
 package rubbertoe.simple_atlas.cartography;
 
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.MapItem;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.material.MapColor;
 import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
+import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import rubbertoe.simple_atlas.component.AtlasContents;
 
@@ -75,120 +80,202 @@ public final class AtlasCartographyScaler {
         return ensureSubMaps(level, scaledContents);
     }
 
-    public static void syncParentAndSubMap(MapItemSavedData parent, MapItemSavedData subMap, int quadrant) {
+    public static void initializeSubMapFromParent(
+            MapItemSavedData parent,
+            MapItemSavedData subMap,
+            int quadrant
+    ) {
         if (parent == null || subMap == null || parent.scale != 1 || subMap.scale != 0) {
             return;
         }
 
         int parentStartX = (quadrant % 2 == 0) ? 0 : 64;
         int parentStartZ = (quadrant < 2) ? 0 : 64;
+        boolean hasRemapped = MapModCompat.isRemappedLoaded();
 
-        ArrayList<Integer> parentRemapped = MapModCompat.getRemappedColors(parent);
-        ArrayList<Integer> subRemapped = MapModCompat.getRemappedColors(subMap);
-        boolean remappedActive = parentRemapped != null || subRemapped != null;
+        for (int subX = 0; subX < MAP_SIZE; subX++) {
+            int parentPx = parentStartX + (subX / 2);
+            for (int subZ = 0; subZ < MAP_SIZE; subZ++) {
+                int parentPz = parentStartZ + (subZ / 2);
+                int pIdx = parentPx + parentPz * MAP_SIZE;
+                byte pColor = parent.colors[pIdx];
 
-        if (remappedActive && subRemapped == null) {
-            MapModCompat.setRemappedColor(subMap, 0, 0, 0);
-            subRemapped = MapModCompat.getRemappedColors(subMap);
+                if (pColor == 0) {
+                    subMap.setColor(subX, subZ, (byte) 0);
+                    if (hasRemapped) {
+                        MapModCompat.setRemappedColor(subMap, subX, subZ, 0);
+                    }
+                    continue;
+                }
+
+                subMap.setColor(subX, subZ, pColor);
+                if (hasRemapped) {
+                    int pRemapped = MapModCompat.getRemappedColor(parent, parentPx, parentPz);
+                    if (pRemapped != 0) {
+                        MapModCompat.setRemappedColor(subMap, subX, subZ, pRemapped);
+                    }
+                }
+            }
         }
+    }
 
-        boolean parentColorsChanged = false;
-        boolean subColorsChanged = false;
+    public static void syncSubMapToParent(MapItemSavedData parent, MapItemSavedData subMap) {
+        if (parent == null || subMap == null || parent.scale != 1 || subMap.scale != 0) {
+            return;
+        }
+        int quadrant = (subMap.centerX > parent.centerX ? 1 : 0) + (subMap.centerZ > parent.centerZ ? 2 : 0);
+        int parentStartX = (quadrant % 2 == 0) ? 0 : 64;
+        int parentStartZ = (quadrant < 2) ? 0 : 64;
+
+        boolean hasRemapped = MapModCompat.isRemappedLoaded();
+        boolean parentChanged = false;
 
         for (int py = 0; py < 64; py++) {
             for (int px = 0; px < 64; px++) {
                 int pX = parentStartX + px;
                 int pZ = parentStartZ + py;
-                int pIdx = pX + pZ * 128;
+                int pIdx = pX + pZ * MAP_SIZE;
 
-                byte pColor = parent.colors[pIdx];
-                int pRemapped = (parentRemapped != null && pIdx < parentRemapped.size()) ? parentRemapped.get(pIdx) : 0;
+                // ONLY fill if parent pixel is currently unexplored (0)
+                if (parent.colors[pIdx] == 0) {
+                    int subBaseX = px * 2;
+                    int subBaseZ = py * 2;
 
-                int subBaseX = px * 2;
-                int subBaseZ = py * 2;
+                    byte sampleSubColor = 0;
+                    int sampleSubRemapped = 0;
 
-                for (int dy = 0; dy < 2; dy++) {
-                    for (int dx = 0; dx < 2; dx++) {
-                        int sX = subBaseX + dx;
-                        int sZ = subBaseZ + dy;
-                        int sIdx = sX + sZ * 128;
+                    for (int dy = 0; dy < 2; dy++) {
+                        for (int dx = 0; dx < 2; dx++) {
+                            int sX = subBaseX + dx;
+                            int sZ = subBaseZ + dy;
+                            int sIdx = sX + sZ * MAP_SIZE;
 
-                        byte sColor = subMap.colors[sIdx];
-                        int sRemapped = (subRemapped != null && sIdx < subRemapped.size()) ? subRemapped.get(sIdx) : 0;
-
-                        // 1. Parent -> SubMap
-                        if (pColor != 0 && sColor == 0) {
-                            subMap.colors[sIdx] = pColor;
-                            subColorsChanged = true;
-                        }
-                        if (pRemapped != 0 && sRemapped == 0 && subRemapped != null && sIdx < subRemapped.size()) {
-                            subRemapped.set(sIdx, pRemapped);
-                            subColorsChanged = true;
-                        }
-
-                        // 2. SubMap -> Parent
-                        if (sColor != 0 && parent.colors[pIdx] == 0) {
-                            parent.colors[pIdx] = sColor;
-                            parentColorsChanged = true;
-                        }
-                        if (sRemapped != 0 && (parentRemapped == null || pIdx >= parentRemapped.size() || parentRemapped.get(pIdx) == 0)) {
-                            if (parentRemapped == null) {
-                                MapModCompat.setRemappedColor(parent, 0, 0, 0);
-                                parentRemapped = MapModCompat.getRemappedColors(parent);
-                            }
-                            if (parentRemapped != null && pIdx < parentRemapped.size()) {
-                                parentRemapped.set(pIdx, sRemapped);
-                                parentColorsChanged = true;
+                            byte sColor = subMap.colors[sIdx];
+                            if (sColor != 0) {
+                                sampleSubColor = sColor;
+                                if (hasRemapped) {
+                                    int sRem = MapModCompat.getRemappedColor(subMap, sIdx);
+                                    if (sRem != 0) {
+                                        sampleSubRemapped = sRem;
+                                    }
+                                }
                             }
                         }
+                    }
+
+                    if (sampleSubColor != 0) {
+                        parent.setColor(pX, pZ, sampleSubColor);
+                        if (sampleSubRemapped != 0) {
+                            MapModCompat.setRemappedColor(parent, pX, pZ, sampleSubRemapped);
+                        }
+                        parentChanged = true;
                     }
                 }
             }
         }
 
-        if (subColorsChanged) {
-            subMap.setColor(0, 0, subMap.colors[0]);
-            subMap.setColor(127, 127, subMap.colors[16383]);
-        }
-        if (parentColorsChanged) {
-            parent.setColor(0, 0, parent.colors[0]);
-            parent.setColor(127, 127, parent.colors[16383]);
+        if (parentChanged) {
+            parent.setDirty();
         }
     }
 
-    public static void syncParentAndSubMaps(ServerLevel level, AtlasContents contents) {
-        if (contents.mapIds().isEmpty() || contents.subMapIds().isEmpty()) {
-            return;
+    public static boolean needs1to1Exploration(MapItemSavedData parent, MapItemSavedData subMap, int quadrant) {
+        if (parent == null || subMap == null || parent.scale != 1 || subMap.scale != 0) {
+            return false;
         }
-        int[] dxOffsets = {-64, 64, -64, 64};
-        int[] dzOffsets = {-64, -64, 64, 64};
 
-        for (int parentRawId : contents.mapIds()) {
-            MapItemSavedData parent = level.getMapData(new MapId(parentRawId));
-            if (parent == null || parent.scale != 1) {
-                continue;
-            }
+        int parentStartX = (quadrant % 2 == 0) ? 0 : 64;
+        int parentStartZ = (quadrant < 2) ? 0 : 64;
 
-            for (int q = 0; q < 4; q++) {
-                int targetX = parent.centerX + dxOffsets[q];
-                int targetZ = parent.centerZ + dzOffsets[q];
+        int totalExploredPairs = 0;
+        int identicalPairs = 0;
+        boolean missingParentCoverage = false;
 
-                for (int subRawId : contents.subMapIds()) {
-                    MapItemSavedData subData = level.getMapData(new MapId(subRawId));
-                    if (subData != null
-                            && subData.scale == 0
-                            && subData.dimension.equals(parent.dimension)
-                            && subData.centerX == targetX
-                            && subData.centerZ == targetZ) {
-                        syncParentAndSubMap(parent, subData, q);
-                        break;
+        for (int y = 0; y < MAP_SIZE; y += 4) {
+            int parentPz = parentStartZ + (y / 2);
+            for (int x = 0; x < MAP_SIZE; x += 4) {
+                int parentPx = parentStartX + (x / 2);
+                byte pCol = parent.colors[parentPx + parentPz * MAP_SIZE];
+                byte sCol1 = subMap.colors[x + y * MAP_SIZE];
+                byte sCol2 = subMap.colors[(x + 1) + y * MAP_SIZE];
+
+                if (pCol != 0 && sCol1 == 0) {
+                    missingParentCoverage = true;
+                }
+
+                if (sCol1 != 0 && sCol2 != 0) {
+                    totalExploredPairs++;
+                    if (sCol1 == sCol2) {
+                        identicalPairs++;
                     }
                 }
             }
         }
+
+        if (missingParentCoverage) {
+            return true;
+        }
+
+        return totalExploredPairs > 20 && identicalPairs == totalExploredPairs;
+    }
+
+    public static void fullyExploreSubMap(ServerLevel level, ServerPlayer player, MapItemSavedData parent, MapItemSavedData subMap, int quadrant) {
+        if (level == null || player == null || parent == null || subMap == null) {
+            return;
+        }
+
+        if (!level.dimension().equals(subMap.dimension)) {
+            return;
+        }
+
+        int parentStartX = (quadrant % 2 == 0) ? 0 : 64;
+        int parentStartZ = (quadrant < 2) ? 0 : 64;
+        boolean hasParentExplored = false;
+        for (int py = 0; py < 64; py++) {
+            for (int px = 0; px < 64; px++) {
+                if (parent.colors[(parentStartX + px) + (parentStartZ + py) * MAP_SIZE] != 0) {
+                    hasParentExplored = true;
+                    break;
+                }
+            }
+            if (hasParentExplored) break;
+        }
+
+        if (!hasParentExplored) {
+            return;
+        }
+
+        Vec3 origPos = player.position();
+        try {
+            player.setPosRaw(subMap.centerX, origPos.y, subMap.centerZ);
+            for (int step = 0; step < 16; step++) {
+                ((MapItem) Items.FILLED_MAP).update(level, player, subMap);
+            }
+        } finally {
+            player.setPosRaw(origPos.x, origPos.y, origPos.z);
+        }
+
+        boolean hasRemapped = MapModCompat.isRemappedLoaded();
+        for (int subX = 0; subX < MAP_SIZE; subX++) {
+            int parentPx = parentStartX + (subX / 2);
+            for (int subZ = 0; subZ < MAP_SIZE; subZ++) {
+                int parentPz = parentStartZ + (subZ / 2);
+                if (parent.colors[parentPx + parentPz * MAP_SIZE] == 0) {
+                    subMap.setColor(subX, subZ, (byte) 0);
+                    if (hasRemapped) {
+                        MapModCompat.setRemappedColor(subMap, subX, subZ, 0);
+                    }
+                }
+            }
+        }
+        subMap.setDirty();
     }
 
     public static AtlasContents ensureSubMaps(ServerLevel level, AtlasContents contents) {
+        return ensureSubMaps(level, contents, null);
+    }
+
+    public static AtlasContents ensureSubMaps(ServerLevel level, AtlasContents contents, @Nullable ServerPlayer player) {
         if (contents.mapIds().isEmpty()) {
             return contents;
         }
@@ -230,7 +317,8 @@ public final class AtlasCartographyScaler {
                     }
                 }
 
-                if (matchingSubId == null) {
+                boolean isNew = (matchingSubId == null);
+                if (isNew) {
                     MapId newSubId = level.getFreeMapId();
                     matchingSubData = MapItemSavedData.createFresh(
                             targetX,
@@ -247,8 +335,58 @@ public final class AtlasCartographyScaler {
 
                 resultSubMapIds.add(matchingSubId);
 
-                // Synchronize colors between parent and submap
-                syncParentAndSubMap(parent, matchingSubData, q);
+                // Initialize if newly created, completely empty, or corrupted with black dots
+                boolean isEmpty = true;
+                for (byte b : matchingSubData.colors) {
+                    if (b != 0) {
+                        isEmpty = false;
+                        break;
+                    }
+                }
+
+                boolean hasRemapped = MapModCompat.isRemappedLoaded();
+                int corruptedBlackDots = 0;
+                int parentStartX = (q % 2 == 0) ? 0 : 64;
+                int parentStartZ = (q < 2) ? 0 : 64;
+
+                if (!isNew && !isEmpty && hasRemapped) {
+                    for (int subX = 0; subX < MAP_SIZE; subX++) {
+                        int parentPx = parentStartX + (subX / 2);
+                        for (int subZ = 0; subZ < MAP_SIZE; subZ++) {
+                            int parentPz = parentStartZ + (subZ / 2);
+                            int pRem = MapModCompat.getRemappedColor(parent, parentPx, parentPz);
+                            int sRem = MapModCompat.getRemappedColor(matchingSubData, subX, subZ);
+                            // If parent has a non-black color, but submap pixel is black (0 or #000000)
+                            if ((pRem & 0xFFFFFF) != 0 && (sRem & 0xFFFFFF) == 0 && matchingSubData.colors[subX + subZ * MAP_SIZE] != 0) {
+                                corruptedBlackDots++;
+                            }
+                        }
+                    }
+                }
+
+                if (isNew || isEmpty || corruptedBlackDots > 10) {
+                    initializeSubMapFromParent(parent, matchingSubData, q);
+                    matchingSubData.setDirty();
+                } else if (corruptedBlackDots > 0) {
+                    for (int subX = 0; subX < MAP_SIZE; subX++) {
+                        int parentPx = parentStartX + (subX / 2);
+                        for (int subZ = 0; subZ < MAP_SIZE; subZ++) {
+                            int parentPz = parentStartZ + (subZ / 2);
+                            int pRem = MapModCompat.getRemappedColor(parent, parentPx, parentPz);
+                            int sRem = MapModCompat.getRemappedColor(matchingSubData, subX, subZ);
+                            int sIdx = subX + subZ * MAP_SIZE;
+                            if ((pRem & 0xFFFFFF) != 0 && (sRem & 0xFFFFFF) == 0 && matchingSubData.colors[sIdx] != 0) {
+                                matchingSubData.setColor(subX, subZ, parent.colors[parentPx + parentPz * MAP_SIZE]);
+                                MapModCompat.setRemappedColor(matchingSubData, subX, subZ, pRem);
+                            }
+                        }
+                    }
+                    matchingSubData.setDirty();
+                }
+
+                if (player != null && level.dimension().equals(parent.dimension) && needs1to1Exploration(parent, matchingSubData, q)) {
+                    fullyExploreSubMap(level, player, parent, matchingSubData, q);
+                }
             }
         }
 
@@ -462,6 +600,12 @@ public final class AtlasCartographyScaler {
                 if (target.colors[targetIndex] == 0) {
                     target.setColor(targetX, targetY, color);
                     newlyFilled[targetIndex] = true;
+                    if (MapModCompat.isRemappedLoaded()) {
+                        int remColor = MapModCompat.getRemappedColor(source, sourceX, sourceY);
+                        if (remColor != 0) {
+                            MapModCompat.setRemappedColor(target, targetX, targetY, remColor);
+                        }
+                    }
                 }
             }
         }

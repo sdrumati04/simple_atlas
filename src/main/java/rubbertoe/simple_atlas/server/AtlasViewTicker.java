@@ -97,12 +97,12 @@ public final class AtlasViewTicker {
         }
 
         mapData.getHoldingPlayer(player);
+        MapModCompat.sendRemappedPackets(player, mapId, mapData);
         Packet<?> packet = mapData.getUpdatePacket(mapId, player);
         Packet<?> augmentedPacket = AtlasWaypointDecorations.withAtlasWaypointDecorations(packet, mapData, contents, false);
         if (augmentedPacket != null) {
             player.connection.send(augmentedPacket);
         }
-        MapModCompat.sendRemappedPackets(player, mapId, mapData);
 
         if (!contents.subMapIds().isEmpty()) {
             Integer currentSubMapRawId = AtlasMapSelector.findCurrentMapRawId(
@@ -119,13 +119,12 @@ public final class AtlasViewTicker {
                     if (!subMapData.locked) {
                         ((MapItem) Items.FILLED_MAP).update(player.level(), player, subMapData);
                     }
-                    AtlasCartographyScaler.syncParentAndSubMaps(player.level(), contents);
                     subMapData.getHoldingPlayer(player);
+                    MapModCompat.sendRemappedPackets(player, subMapId, subMapData);
                     Packet<?> subPacket = subMapData.getUpdatePacket(subMapId, player);
                     if (subPacket != null) {
                         player.connection.send(subPacket);
                     }
-                    MapModCompat.sendRemappedPackets(player, subMapId, subMapData);
                 }
             }
         }

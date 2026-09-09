@@ -142,7 +142,7 @@ public abstract class CartographyTableResultSlotMixin {
 
         if (carried.is(ModItems.ATLAS) && player instanceof ServerPlayer serverPlayer) {
             AtlasContents contents = carried.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
-            AtlasContents ensured = AtlasCartographyScaler.ensureSubMaps(serverPlayer.level(), contents);
+            AtlasContents ensured = AtlasCartographyScaler.ensureSubMaps(serverPlayer.level(), contents, serverPlayer);
             if (!ensured.equals(contents)) {
                 carried.set(ModComponents.ATLAS_CONTENTS, ensured);
             }

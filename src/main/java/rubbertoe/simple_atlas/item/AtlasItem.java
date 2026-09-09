@@ -160,8 +160,8 @@ public class AtlasItem extends Item {
             return InteractionResult.SUCCESS;
         }
 
-        // Ensure sub-maps exist for any scale 1 map
-        AtlasContents ensuredContents = AtlasCartographyScaler.ensureSubMaps(serverLevel, contents);
+        // Ensure sub-maps exist for any scale 1 map and are explored in 1:1
+        AtlasContents ensuredContents = AtlasCartographyScaler.ensureSubMaps(serverLevel, contents, (ServerPlayer) player);
         if (!ensuredContents.equals(contents)) {
             atlasStack.set(ModComponents.ATLAS_CONTENTS, ensuredContents);
             contents = ensuredContents;
@@ -232,6 +232,11 @@ public class AtlasItem extends Item {
                     subMapData.getHoldingPlayer(player);
                     subMapData.tickCarriedBy(player, stack, null);
                     ((MapItem) Items.FILLED_MAP).update(level, player, subMapData);
+
+                    MapItemSavedData parentData = level.getMapData(targetId);
+                    if (parentData != null) {
+                        AtlasCartographyScaler.syncSubMapToParent(parentData, subMapData);
+                    }
                 }
             }
         }
@@ -301,12 +306,12 @@ public class AtlasItem extends Item {
                 mapData.setColor(0, 0, mapData.colors[0]);
                 mapData.setColor(127, 127, mapData.colors[mapData.colors.length - 1]);
             }
+            MapModCompat.sendRemappedPackets(player, mapId, mapData);
             Packet<?> packet = mapData.getUpdatePacket(mapId, player);
 
             if (packet != null) {
                 player.connection.send(packet);
             }
-            MapModCompat.sendRemappedPackets(player, mapId, mapData);
         }
     }
 
