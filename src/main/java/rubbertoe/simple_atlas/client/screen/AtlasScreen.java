@@ -481,9 +481,7 @@ public class AtlasScreen extends Screen {
         }
         int newIdx = currentIdx + delta;
         if (newIdx >= 0 && newIdx < scales.size()) {
-            activeViewScale = scales.get(newIdx);
-            rebuildScaleWidgets();
-            centerOnSelectedDimensionAtCurrentZoom();
+            changeScalePreservingView(scales.get(newIdx));
         }
     }
 
@@ -494,9 +492,66 @@ public class AtlasScreen extends Screen {
         }
         int currentIdx = scales.indexOf(activeViewScale);
         int nextIdx = (currentIdx + 1) % scales.size();
-        activeViewScale = scales.get(nextIdx);
+        changeScalePreservingView(scales.get(nextIdx));
+    }
+
+    private void changeScalePreservingView(int newScale) {
+        if (newScale == activeViewScale) {
+            return;
+        }
+
+        String dimension = getSelectedDimension();
+        AtlasViewport viewport = getAtlasViewport();
+        float scaledTileSize = TILE_SIZE * zoom;
+
+        List<AtlasTilePayload> oldTiles = getVisibleTilesForDimension(dimension);
+        List<AtlasTilePayload> newTiles = tiles.stream()
+                .filter(t -> t.dimension().equals(dimension) && t.scale() == newScale)
+                .toList();
+
+        if (oldTiles.isEmpty() || newTiles.isEmpty()) {
+            activeViewScale = newScale;
+            rebuildScaleWidgets();
+            centerOnSelectedDimensionAtCurrentZoom();
+            return;
+        }
+
+        double screenCenterX = viewport.contentX() + viewport.contentWidth() / 2.0;
+        double screenCenterY = viewport.contentY() + viewport.contentHeight() / 2.0;
+
+        // 1. Calculate world point currently at the center of the viewport under old scale
+        AtlasTilePayload oldTile = oldTiles.getFirst();
+        int oldScaleFactor = 1 << oldTile.scale();
+        float oldOriginX = getMapOriginX(viewport, scaledTileSize, dimension);
+        float oldOriginY = getMapOriginY(viewport, scaledTileSize, dimension);
+
+        float oldTileScreenX = oldOriginX + (float) panX + localTileX(dimension, oldTile) * scaledTileSize;
+        float oldTileScreenY = oldOriginY + (float) panY + localTileY(dimension, oldTile) * scaledTileSize;
+
+        double oldTileWorldMinX = oldTile.centerX() - 64.0 * oldScaleFactor;
+        double oldTileWorldMinZ = oldTile.centerZ() - 64.0 * oldScaleFactor;
+
+        double centerWorldX = oldTileWorldMinX + ((screenCenterX - oldTileScreenX) / (scaledTileSize / 128.0)) * oldScaleFactor;
+        double centerWorldZ = oldTileWorldMinZ + ((screenCenterY - oldTileScreenY) / (scaledTileSize / 128.0)) * oldScaleFactor;
+
+        // 2. Set the new scale
+        activeViewScale = newScale;
         rebuildScaleWidgets();
-        centerOnSelectedDimensionAtCurrentZoom();
+
+        // 3. Compute new panX and panY so centerWorldX and centerWorldZ remain at screenCenterX and screenCenterY
+        AtlasTilePayload newTile = newTiles.getFirst();
+        int newScaleFactor = 1 << newTile.scale();
+        float newOriginX = getMapOriginX(viewport, scaledTileSize, dimension);
+        float newOriginY = getMapOriginY(viewport, scaledTileSize, dimension);
+
+        double newTileWorldMinX = newTile.centerX() - 64.0 * newScaleFactor;
+        double newTileWorldMinZ = newTile.centerZ() - 64.0 * newScaleFactor;
+
+        double newTileScreenX = screenCenterX - ((centerWorldX - newTileWorldMinX) / newScaleFactor) * (scaledTileSize / 128.0);
+        double newTileScreenY = screenCenterY - ((centerWorldZ - newTileWorldMinZ) / newScaleFactor) * (scaledTileSize / 128.0);
+
+        this.panX = newTileScreenX - newOriginX - localTileX(dimension, newTile) * scaledTileSize;
+        this.panY = newTileScreenY - newOriginY - localTileY(dimension, newTile) * scaledTileSize;
     }
 
     private void rebuildScaleWidgets() {
