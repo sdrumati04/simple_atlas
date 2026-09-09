@@ -312,16 +312,12 @@ public class AtlasItem extends Item {
             }
 
             mapData.getHoldingPlayer(player);
-            if (mapData.colors != null && mapData.colors.length > 0) {
-                mapData.setColor(0, 0, mapData.colors[0]);
-                mapData.setColor(127, 127, mapData.colors[mapData.colors.length - 1]);
-            }
-            MapModCompat.sendRemappedPackets(player, mapId, mapData);
             Packet<?> packet = mapData.getUpdatePacket(mapId, player);
 
             if (packet != null) {
                 player.connection.send(packet);
             }
+            MapModCompat.sendRemappedPackets(player, mapId, mapData);
         }
     }
 
