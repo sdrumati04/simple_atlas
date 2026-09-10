@@ -13,7 +13,7 @@ Simple Atlas adds an **Atlas** item that stores multiple filled maps and opens i
 - **Scale Up (Paper):** Combine an Atlas with paper to scale up all maps by one level (+1). The process employs 1:1 real-world block scanning, high-fidelity modal downsampling, and edge shading.
 - **Scale Down (Shears):** Combine an Atlas with shears to downscale maps by one level (-1). Each explored quadrant is split into child maps, and the shears consume 1 durability point rather than being destroyed.
 - **Duplicate (Book):** Combine an Atlas with a book at the cartography table to produce an identical duplicate copy.
-- **Merge Atlases:** Combine two atlases of matching map scale to merge their maps and waypoints into one atlas (up to the configured map limit).
+- **Merge Atlases:** Combine two atlases to merge their maps and waypoints into one atlas (multi-scale supported, up to the configured map limit).
 - **Multi-Scale Atlas Support & Tooltips:** An atlas can store maps across multiple scales. Hovering over an atlas displays the currently active scale (`Scale: 1:X`) as well as all available scales contained inside.
 
 ### Interactive World Map
@@ -72,8 +72,8 @@ Includes custom advancements under the **Adventure** tab:
    - Scale up using **Paper**
    - Scale down using **Shears**
    - Duplicate using a **Book**
-   - Merge another Atlas with matching scale
-4. Hold the Atlas in your main hand and use (right-click) it to open the interactive screen.
+   - Merge another Atlas (multi-scale supported)
+4. Hold the Atlas in either hand and use (right-click) it to open the interactive screen.
 5. Zoom, pan, switch map scales, and browse dimensions using bookmark tabs.
 6. Right-click map locations to create waypoints, copy coordinates, or remove individual maps.
 7. Locate waypoints on your HUD locator bar for effortless navigation.

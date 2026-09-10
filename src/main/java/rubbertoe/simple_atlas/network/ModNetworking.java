@@ -109,6 +109,9 @@ public final class ModNetworking {
                     var player = context.player();
                     ItemStack atlasStack = player.getMainHandItem();
                     if (!atlasStack.is(ModItems.ATLAS)) {
+                        atlasStack = player.getOffhandItem();
+                    }
+                    if (!atlasStack.is(ModItems.ATLAS)) {
                         return;
                     }
 
@@ -178,6 +181,9 @@ public final class ModNetworking {
                 (payload, context) -> context.server().execute(() -> {
                     var player = context.player();
                     ItemStack atlasStack = player.getMainHandItem();
+                    if (!atlasStack.is(ModItems.ATLAS)) {
+                        atlasStack = player.getOffhandItem();
+                    }
                     if (!atlasStack.is(ModItems.ATLAS)) {
                         return;
                     }

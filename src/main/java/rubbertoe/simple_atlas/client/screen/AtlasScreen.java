@@ -18,6 +18,8 @@ import net.minecraft.util.Mth;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.permissions.Permissions;
 import net.minecraft.sounds.SoundEvents;
+import net.minecraft.world.level.saveddata.maps.MapDecoration;
+import net.minecraft.world.level.saveddata.maps.MapDecorationTypes;
 import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 import org.jspecify.annotations.NonNull;
@@ -1218,7 +1220,7 @@ public class AtlasScreen extends Screen {
             }
 
             AtlasContents.WaypointData waypoint = atlasWaypoints.get(i);
-            UUID waypointId = WaypointIconCatalog.navigationWaypointId(waypoint.worldX(), waypoint.worldZ());
+            UUID waypointId = WaypointIconCatalog.navigationWaypointId(waypoint.dimension(), waypoint.worldX(), waypoint.worldZ());
             if (!pinnedIds.contains(waypointId)) {
                 continue;
             }
@@ -1681,11 +1683,34 @@ public class AtlasScreen extends Screen {
         graphics.pose().scale(scale, scale);
 
         minecraft.getMapRenderer().extractRenderState(id, data, state);
-        // AtlasScreen draws zoom-aware icons itself; suppress map-renderer decorations to avoid duplicate static markers.
-        state.decorations.clear();
+        // AtlasScreen draws player icons itself; suppress player map markers to avoid duplicate static markers while preserving treasure, structure, and banner markers.
+        removePlayerDecorations(data, state);
         graphics.map(state);
 
         graphics.pose().popMatrix();
+    }
+
+    private static void removePlayerDecorations(MapItemSavedData data, MapRenderState state) {
+        List<MapDecoration> dataDecs = new ArrayList<>();
+        data.getDecorations().forEach(dataDecs::add);
+        if (dataDecs.size() == state.decorations.size()) {
+            for (int i = state.decorations.size() - 1; i >= 0; i--) {
+                MapDecoration dec = dataDecs.get(i);
+                if (isPlayerDecoration(dec)) {
+                    state.decorations.remove(i);
+                }
+            }
+        } else {
+            state.decorations.clear();
+        }
+    }
+
+    private static boolean isPlayerDecoration(MapDecoration dec) {
+        var type = dec.type();
+        return type.equals(MapDecorationTypes.PLAYER)
+                || type.equals(MapDecorationTypes.PLAYER_OFF_MAP)
+                || type.equals(MapDecorationTypes.PLAYER_OFF_LIMITS)
+                || type.equals(MapDecorationTypes.FRAME);
     }
 
     private void renderAtlasBackground(

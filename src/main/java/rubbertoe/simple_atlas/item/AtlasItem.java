@@ -55,7 +55,7 @@ public class AtlasItem extends Item {
     @Override
     public @NonNull InteractionResult useOn(@NonNull UseOnContext context) {
         Player player = context.getPlayer();
-        if (player == null || context.getHand() != InteractionHand.MAIN_HAND) {
+        if (player == null) {
             return InteractionResult.PASS;
         }
 
@@ -156,10 +156,6 @@ public class AtlasItem extends Item {
 
     @Override
     public @NonNull InteractionResult use(@NonNull Level level, @NonNull Player player, @NonNull InteractionHand hand) {
-        if (hand != InteractionHand.MAIN_HAND) {
-            return InteractionResult.PASS;
-        }
-
         if (level.isClientSide()) {
             return InteractionResult.SUCCESS;
         }

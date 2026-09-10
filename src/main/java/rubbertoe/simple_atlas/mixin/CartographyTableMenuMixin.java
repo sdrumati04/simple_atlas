@@ -81,22 +81,6 @@ public abstract class CartographyTableMenuMixin {
                     return;
                 }
 
-                // If atlas already contains maps, enforce same scale:
-                if (!contents.mapIds().isEmpty()) {
-                    int existingScale = -1;
-                    for (int existingRawId : contents.mapIds()) {
-                        MapItemSavedData d = level.getMapData(new MapId(existingRawId));
-                        if (d != null) {
-                            existingScale = d.scale;
-                            break;
-                        }
-                    }
-                    if (existingScale >= 0 && newMapData.scale != existingScale) {
-                        simple_atlas$rejectAtlasResult();
-                        return;
-                    }
-                }
-
                 if (!contents.canAddMapId() || contents.contains(mapId.id())) {
                     simple_atlas$rejectAtlasResult();
                     return;
@@ -127,13 +111,14 @@ public abstract class CartographyTableMenuMixin {
             AtlasContents contents = atlasInput.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
             this.access.execute((level, _) -> {
-                if (!(level instanceof ServerLevel serverLevel)
-                        || !AtlasCartographyScaler.canScaleAtlas(serverLevel, contents)) {
+                int targetScale = AtlasCartographyScaler.getTargetUpscale(level, contents);
+                if (targetScale < 0) {
                     simple_atlas$rejectAtlasResult();
                     return;
                 }
 
                 ItemStack result = atlasInput.copyWithCount(1);
+                result.set(ModComponents.ATLAS_CONTENTS, contents.withSelectedScale(targetScale + 1));
                 if (!ItemStack.matches(result, resultStack)) {
                     this.resultContainer.setItem(2, result);
                     ((CartographyTableMenu) (Object) this).broadcastChanges();
@@ -152,13 +137,14 @@ public abstract class CartographyTableMenuMixin {
             AtlasContents contents = atlasInput.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
             this.access.execute((level, _) -> {
-                if (!(level instanceof ServerLevel serverLevel)
-                        || !AtlasCartographyScaler.canDownscaleAtlas(serverLevel, contents)) {
+                int targetScale = AtlasCartographyScaler.getTargetDownscale(level, contents);
+                if (targetScale <= 0 || !AtlasCartographyScaler.canDownscaleAtlas(level, contents)) {
                     simple_atlas$rejectAtlasResult();
                     return;
                 }
 
                 ItemStack result = atlasInput.copyWithCount(1);
+                result.set(ModComponents.ATLAS_CONTENTS, contents.withSelectedScale(targetScale - 1));
                 if (!ItemStack.matches(result, resultStack)) {
                     this.resultContainer.setItem(2, result);
                     ((CartographyTableMenu) (Object) this).broadcastChanges();
@@ -169,29 +155,12 @@ public abstract class CartographyTableMenuMixin {
             return;
         }
 
-        // ── Atlas + atlas → merge contents (matching scale required) ─────────
+        // ── Atlas + atlas → merge contents ──────────────────────────────────
         if (mapStack.is(ModItems.ATLAS) && additionalStack.is(ModItems.ATLAS)) {
             AtlasContents topContents = mapStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
             AtlasContents bottomContents = additionalStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
             this.access.execute((level, _) -> {
-                if (!topContents.mapIds().isEmpty() && !bottomContents.mapIds().isEmpty()) {
-                    int topScale = -1;
-                    for (int id : topContents.mapIds()) {
-                        MapItemSavedData d = level.getMapData(new MapId(id));
-                        if (d != null) { topScale = d.scale; break; }
-                    }
-                    int bottomScale = -1;
-                    for (int id : bottomContents.mapIds()) {
-                        MapItemSavedData d = level.getMapData(new MapId(id));
-                        if (d != null) { bottomScale = d.scale; break; }
-                    }
-                    if (topScale >= 0 && bottomScale >= 0 && topScale != bottomScale) {
-                        simple_atlas$rejectAtlasResult();
-                        return;
-                    }
-                }
-
                 LinkedHashSet<Integer> mergedMapIds = new LinkedHashSet<>(bottomContents.mapIds());
                 mergedMapIds.addAll(topContents.mapIds());
                 int mergedMapCount = mergedMapIds.size();
@@ -225,13 +194,15 @@ public abstract class CartographyTableMenuMixin {
 
         int selectedIcon = base.selectedWaypointIconIndex();
         int nextWaypointNumber = Math.max(base.nextWaypointNumber(), incoming.nextWaypointNumber());
+        int selectedScale = base.selectedScale() >= 0 ? base.selectedScale() : incoming.selectedScale();
 
         return new AtlasContents(
                 List.copyOf(mergedMapIds),
                 new ArrayList<>(mergedWaypoints),
                 selectedIcon,
                 nextWaypointNumber,
-                0
+                0,
+                selectedScale
         );
     }
 

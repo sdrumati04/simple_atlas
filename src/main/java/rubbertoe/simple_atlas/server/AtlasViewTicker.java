@@ -39,17 +39,13 @@ public final class AtlasViewTicker {
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             ItemStack mainHand = player.getMainHandItem();
             ItemStack offHand = player.getOffhandItem();
-            boolean holdingAtlasInMainHand = mainHand.is(ModItems.ATLAS);
-            boolean holdingAtlas = holdingAtlasInMainHand || offHand.is(ModItems.ATLAS);
+            boolean holdingAtlas = mainHand.is(ModItems.ATLAS) || offHand.is(ModItems.ATLAS);
 
-            // If the atlas left the main hand, close any open view.
-            if (!holdingAtlasInMainHand) {
+            // If the atlas left the player's hands, close any open view.
+            if (!holdingAtlas) {
                 if (AtlasViewManager.isViewing(player)) {
                     AtlasViewManager.stopViewing(player);
                 }
-            }
-
-            if (!holdingAtlas) {
                 continue;
             }
 

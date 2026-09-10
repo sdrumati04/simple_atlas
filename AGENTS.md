@@ -12,7 +12,7 @@
 - Atlas state is stored in `ModComponents.ATLAS_CONTENTS` using `component/AtlasContents.java`.
 - `AtlasContents` stores map IDs + waypoint state (`waypoints`, `selectedWaypointIconIndex`, `nextWaypointNumber`), `selectedScale`, enforces configured map/waypoint caps dynamically, sanitizes waypoint names/icon indices/dimensions, and retains `blankMapCount` and legacy `sub_map_ids` for codec backwards compatibility.
 - Core gameplay logic is in `item/AtlasItem.java`:
-  - `useOn` on banners (main hand only) creates banner-derived waypoints with duplicate-position prevention and configured waypoint limit enforcement.
+  - `useOn` on banners creates banner-derived waypoints with duplicate-position prevention and configured waypoint limit enforcement.
   - `use` groups maps by dimension and scale, builds layout via `AtlasLayoutBuilder.build(...)`, sends `OpenAtlasScreenPayload`, and registers active viewers in `AtlasViewManager`.
   - `inventoryTick` keeps atlas `DataComponents.MAP_ID` synced with current position and selected scale (`AtlasMapSelector`), delegates to `Items.FILLED_MAP.inventoryTick(...)` for vanilla marker behavior, and performs multi-scale live exploration by ticking and updating all overlapping maps covering the player across all scales.
   - `appendHoverText` displays active scale ratio (`1:X`) and lists all contained scale ratios if multiple are present.
@@ -20,10 +20,10 @@
 - Cartography behavior is mixin-driven (`CartographyTableMenuMixin`, `CartographyTableAdditionalSlotMixin`, `CartographyTableMapSlotMixin`, `CartographyTableResultSlotMixin`):
   - Flexible slot routing: inputs (Atlas, Book, Filled Map, Paper, Shears) can be placed in either slot `0` or slot `1`.
   - Book + atlas: duplicate atlas.
-  - Filled map + atlas: add map after dedupe and configured limits.
+  - Filled map + atlas: add map after dedupe and configured limits (multi-scale supported).
   - Atlas + paper: scale atlas maps up by +1 in-place using `AtlasCartographyScaler.scaleAtlas`.
   - Atlas + shears: scale atlas maps down by -1 in-place using `AtlasCartographyScaler.downscaleAtlas`. Explored quadrants are split into child maps, and shears take 1 durability damage rather than being consumed.
-  - Atlas + atlas: merge map/waypoint contents when scales match and total map count does not exceed limit.
+  - Atlas + atlas: merge map/waypoint contents (multi-scale supported) when total map count does not exceed limit.
 - `CartographyTableMenuMixin` also intercepts `quickMoveStack` (shift-click) with intelligent routing for atlas, shears, paper, books, and filled maps, and executes scaling/downscaling upon shift-clicking the result slot. `AbstractContainerMenuInvoker` exposes `moveItemStackTo` and `broadcastChanges`.
 - `cartography/AtlasCartographyScaler.java` handles atlas-wide scaling and downscaling:
   - Upscale (+1): uses 1:1 real-world block scanning, heightmap sampling, fluid depth, dithering, modal downsampling, and exploration edge shading.
@@ -35,7 +35,7 @@
   - Synchronizes custom remapped colors, custom block color matching, dithering, and custom network packets during cartography scaling, held map ticking, and atlas viewing.
 - Live map sync:
   - `AtlasViewManager` tracks active viewers.
-  - `AtlasViewTicker` pushes updates every 10 ticks for active atlas viewers and closes active view if atlas leaves main hand (sending vanilla and remapped packets).
+  - `AtlasViewTicker` pushes updates every 10 ticks for active atlas viewers and closes active view if atlas leaves player's hands (sending vanilla and remapped packets).
   - `ServerPlayerMixin` intercepts `synchronizeSpecialItemUpdates` for held atlases.
   - Packet augmentation uses `AtlasWaypointDecorations`.
 - Client UI is `client/screen/AtlasScreen.java`:

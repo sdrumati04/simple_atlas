@@ -42,16 +42,10 @@ public final class AtlasCartographyScaler {
 
     // ----- Atlas-wide upscale (Paper + Atlas) -----
 
-    public static boolean canScaleAtlas(ServerLevel level, AtlasContents contents) {
-        return validateScaleInputs(level, contents);
-    }
-
-    public static @Nullable AtlasContents scaleAtlas(ServerLevel level, AtlasContents contents) {
-        if (!validateScaleInputs(level, contents)) {
-            return null;
+    public static int getTargetUpscale(Level level, AtlasContents contents) {
+        if (contents.mapIds().isEmpty()) {
+            return -1;
         }
-
-        // Determine the highest scale present in the atlas that can still be scaled (< MAX_SCALE).
         int targetScale = -1;
         for (int rawId : contents.mapIds()) {
             MapItemSavedData mapData = level.getMapData(new MapId(rawId));
@@ -61,7 +55,15 @@ public final class AtlasCartographyScaler {
                 }
             }
         }
+        return targetScale;
+    }
 
+    public static boolean canScaleAtlas(Level level, AtlasContents contents) {
+        return getTargetUpscale(level, contents) >= 0;
+    }
+
+    public static @Nullable AtlasContents scaleAtlas(ServerLevel level, AtlasContents contents) {
+        int targetScale = getTargetUpscale(level, contents);
         if (targetScale < 0) {
             return null;
         }
@@ -149,11 +151,10 @@ public final class AtlasCartographyScaler {
 
     // ----- Atlas-wide downscale (Shears + Atlas) -----
 
-    public static boolean canDownscaleAtlas(ServerLevel level, AtlasContents contents) {
+    public static int getTargetDownscale(Level level, AtlasContents contents) {
         if (contents.mapIds().isEmpty()) {
-            return false;
+            return -1;
         }
-
         int targetScale = -1;
         for (int rawId : contents.mapIds()) {
             MapItemSavedData mapData = level.getMapData(new MapId(rawId));
@@ -163,7 +164,11 @@ public final class AtlasCartographyScaler {
                 }
             }
         }
+        return targetScale;
+    }
 
+    public static boolean canDownscaleAtlas(Level level, AtlasContents contents) {
+        int targetScale = getTargetDownscale(level, contents);
         if (targetScale <= 0) {
             return false;
         }
@@ -204,16 +209,7 @@ public final class AtlasCartographyScaler {
             return null;
         }
 
-        int targetScale = -1;
-        for (int rawId : contents.mapIds()) {
-            MapItemSavedData mapData = level.getMapData(new MapId(rawId));
-            if (mapData != null && !mapData.locked && mapData.scale > 0) {
-                if (targetScale < 0 || mapData.scale < targetScale) {
-                    targetScale = mapData.scale;
-                }
-            }
-        }
-
+        int targetScale = getTargetDownscale(level, contents);
         if (targetScale <= 0) {
             return null;
         }
