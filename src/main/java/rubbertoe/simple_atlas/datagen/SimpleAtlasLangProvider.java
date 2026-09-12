@@ -37,6 +37,7 @@ public class SimpleAtlasLangProvider extends FabricLanguageProvider {
         translationBuilder.add("message.simple_atlas.waypoint_limit_reached", "Atlas waypoint limit reached (%s)");
         translationBuilder.add("message.simple_atlas.no_maps_inserted", "Your atlas has no maps inserted");
         translationBuilder.add("tooltip.simple_atlas.no_maps", "No maps inserted");
+        translationBuilder.add("tooltip.simple_atlas.blank_maps", "Empty maps: %s");
         translationBuilder.add("tooltip.simple_atlas.scale", "Scale: (1:%s)");
         translationBuilder.add("tooltip.simple_atlas.scales", "Scales: %s");
         translationBuilder.add("gui.simple_atlas.scale_ratio", "Scale 1:%s");

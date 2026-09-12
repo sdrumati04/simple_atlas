@@ -22,7 +22,8 @@ public abstract class CartographyTableMapSlotMixin {
         if (itemStack.is(Items.BOOK)
                 || itemStack.is(ModItems.ATLAS)
                 || itemStack.is(Items.SHEARS)
-                || itemStack.is(Items.PAPER)) {
+                || itemStack.is(Items.PAPER)
+                || rubbertoe.simple_atlas.compat.MapModCompat.isEmptyMap(itemStack)) {
             cir.setReturnValue(true);
         }
     }

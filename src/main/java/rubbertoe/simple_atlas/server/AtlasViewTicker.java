@@ -18,6 +18,7 @@ import rubbertoe.simple_atlas.component.ModComponents;
 import rubbertoe.simple_atlas.item.AtlasItem;
 import rubbertoe.simple_atlas.item.ModItems;
 import rubbertoe.simple_atlas.map.AtlasMapSelector;
+import rubbertoe.simple_atlas.mixin.HoldingPlayerAccessor;
 
 public final class AtlasViewTicker {
     private static final int SYNC_INTERVAL_TICKS = 10;
@@ -94,12 +95,26 @@ public final class AtlasViewTicker {
             ((MapItem) Items.FILLED_MAP).update(player.level(), player, mapData);
         }
 
-        mapData.getHoldingPlayer(player);
-        MapModCompat.sendRemappedPackets(player, mapId, mapData);
+        MapItemSavedData.HoldingPlayer holdingPlayer = mapData.getHoldingPlayer(player);
+        boolean wasDirtyData = false;
+        HoldingPlayerAccessor accessor = null;
+        if (MapModCompat.isRemappedLoaded() && holdingPlayer instanceof HoldingPlayerAccessor acc) {
+            accessor = acc;
+            wasDirtyData = accessor.simple_atlas$getDirtyData();
+        }
+
         Packet<?> packet = mapData.getUpdatePacket(mapId, player);
-        Packet<?> augmentedPacket = AtlasWaypointDecorations.withAtlasWaypointDecorations(packet, mapData, contents, false);
+        Packet<?> augmentedPacket = AtlasWaypointDecorations.withAtlasWaypointDecorations(packet, mapData, contents);
         if (augmentedPacket != null) {
             player.connection.send(augmentedPacket);
+        }
+
+        if (accessor != null && wasDirtyData) {
+            accessor.simple_atlas$setDirtyData(true);
+            MapModCompat.sendRemappedPackets(player, mapId, mapData);
+            accessor.simple_atlas$setDirtyData(false);
+        } else {
+            MapModCompat.sendRemappedPackets(player, mapId, mapData);
         }
     }
 }

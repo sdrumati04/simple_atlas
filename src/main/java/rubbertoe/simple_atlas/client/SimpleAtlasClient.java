@@ -4,14 +4,19 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import rubbertoe.simple_atlas.client.input.ModKeyBindings;
 import rubbertoe.simple_atlas.client.screen.AtlasScreen;
+import rubbertoe.simple_atlas.compat.ImmersiveOverlaysCompat;
 import rubbertoe.simple_atlas.network.OpenAtlasScreenPayload;
 
 public class SimpleAtlasClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ModKeyBindings.initialize();
+        ImmersiveOverlaysCompat.init();
+
+        ClientLifecycleEvents.CLIENT_STARTED.register(_ -> ImmersiveOverlaysCompat.init());
 
         // Register network receiver for opening atlas screen from server
         ClientPlayNetworking.registerGlobalReceiver(OpenAtlasScreenPayload.TYPE, (payload, _) ->

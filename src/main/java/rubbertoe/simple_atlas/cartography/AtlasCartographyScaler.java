@@ -103,7 +103,6 @@ public final class AtlasCartographyScaler {
                     mapLevel = level;
                 }
                 scanWorldBlocksForScaledMap(mapLevel, target, projection.projectedCoverage, buffer.getTargetRem());
-                applyExplorationEdgeShading(target, projection.newlyFilled, projection.projectedCoverage, buffer.getTargetRem());
                 if (buffer.getTargetRem() != null) {
                     MapModCompat.setRemappedColors(target, buffer.getTargetRem());
                 }
@@ -129,7 +128,7 @@ public final class AtlasCartographyScaler {
                 contents.waypoints(),
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
-                0,
+                contents.blankMapCount(),
                 targetScale + 1
         );
     }
@@ -340,7 +339,7 @@ public final class AtlasCartographyScaler {
                 contents.waypoints(),
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
-                0,
+                contents.blankMapCount(),
                 childScale
         );
     }
@@ -530,71 +529,6 @@ public final class AtlasCartographyScaler {
             return new ProjectionMask(newlyFilled, projectedCoverage);
         }
     }
-
-    // ----- Exploration edge shading -----
-
-    private static void applyExplorationEdgeShading(
-            MapItemSavedData target,
-            boolean[] newlyFilled,
-            boolean[] projectedCoverage,
-            @Nullable ArrayList<Integer> targetRem
-    ) {
-        byte[] snapshot = target.colors.clone();
-
-        byte[] borderClass = new byte[MAP_PIXEL_COUNT];
-
-        for (int y = 0; y < MAP_SIZE; y++) {
-            for (int x = 0; x < MAP_SIZE; x++) {
-                int index = x + y * MAP_SIZE;
-                if ((snapshot[index] & 0xFF) == 0 || !newlyFilled[index] || !projectedCoverage[index]) continue;
-
-                boolean adjEmpty =
-                        (y > 0   && snapshot[x + (y - 1) * MAP_SIZE] == 0) ||
-                        (y < MAP_SIZE - 1 && snapshot[x + (y + 1) * MAP_SIZE] == 0) ||
-                        (x > 0   && snapshot[(x - 1) + y * MAP_SIZE] == 0) ||
-                        (x < MAP_SIZE - 1 && snapshot[(x + 1) + y * MAP_SIZE] == 0);
-
-                if (adjEmpty) {
-                    borderClass[index] = 1;
-                }
-            }
-        }
-
-        for (int y = 0; y < MAP_SIZE; y++) {
-            for (int x = 0; x < MAP_SIZE; x++) {
-                int index = x + y * MAP_SIZE;
-                if ((snapshot[index] & 0xFF) == 0 || !newlyFilled[index]) continue;
-                if (borderClass[index] != 0) continue;
-
-                boolean adjOuter =
-                        (y > 0   && borderClass[x + (y - 1) * MAP_SIZE] == 1) ||
-                        (y < MAP_SIZE - 1 && borderClass[x + (y + 1) * MAP_SIZE] == 1) ||
-                        (x > 0   && borderClass[(x - 1) + y * MAP_SIZE] == 1) ||
-                        (x < MAP_SIZE - 1 && borderClass[(x + 1) + y * MAP_SIZE] == 1);
-
-                if (adjOuter) {
-                    borderClass[index] = 2;
-                }
-            }
-        }
-
-        for (int y = 0; y < MAP_SIZE; y++) {
-            for (int x = 0; x < MAP_SIZE; x++) {
-                int index = x + y * MAP_SIZE;
-                byte cls = borderClass[index];
-                if (cls == 0) continue;
-
-                boolean erase = (x + y) % 2 == 0;
-                if (erase) {
-                    target.setColor(x, y, (byte) 0);
-                    if (targetRem != null && index < targetRem.size()) {
-                        targetRem.set(index, 0);
-                    }
-                }
-            }
-        }
-    }
-
     // ----- Real world block scanning (1:1 identical to walking on foot) -----
 
     private static void scanWorldBlocksForScaledMap(

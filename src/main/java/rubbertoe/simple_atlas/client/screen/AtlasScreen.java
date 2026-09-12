@@ -17,8 +17,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.permissions.Permissions;
+import net.minecraft.core.Holder;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.level.saveddata.maps.MapDecoration;
+import net.minecraft.world.level.saveddata.maps.MapDecorationType;
 import net.minecraft.world.level.saveddata.maps.MapDecorationTypes;
 import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
@@ -40,6 +42,7 @@ import rubbertoe.simple_atlas.network.RemoveAtlasMapPayload;
 import rubbertoe.simple_atlas.network.SaveAtlasWaypointsPayload;
 import rubbertoe.simple_atlas.network.UnpinWaypointPayload;
 import rubbertoe.simple_atlas.navigation.WaypointIconCatalog;
+import rubbertoe.simple_atlas.server.AtlasWaypointDecorations;
 
 import java.util.*;
 
@@ -1507,9 +1510,80 @@ public class AtlasScreen extends Screen {
 
         List<Integer> atlasMapIdsSnapshot = List.copyOf(atlasMapIds);
         ClientPlayNetworking.send(new RemoveAtlasMapPayload(atlasMapIdsSnapshot, removedMapId));
-        skipWaypointSaveOnClose = true;
+
+        atlasMapIds.remove(Integer.valueOf(removedMapId));
+        List<AtlasTilePayload> removedTiles = tiles.stream()
+                .filter(t -> t.mapId() == removedMapId)
+                .toList();
+        tiles.removeIf(t -> t.mapId() == removedMapId);
+        renderStates.remove(removedMapId);
+
+        if (atlasMapIds.isEmpty() || tiles.isEmpty()) {
+            skipWaypointSaveOnClose = true;
+            playMapRemovalSound();
+            onClose();
+            return;
+        }
+
+        // Remove waypoints that were on the removed tile and are not covered by any remaining tile
+        for (int i = atlasWaypoints.size() - 1; i >= 0; i--) {
+            AtlasContents.WaypointData waypoint = atlasWaypoints.get(i);
+            boolean wasOnRemovedTile = false;
+            for (AtlasTilePayload rt : removedTiles) {
+                if (isWaypointOnTile(waypoint, rt)) {
+                    wasOnRemovedTile = true;
+                    break;
+                }
+            }
+            if (wasOnRemovedTile && !isWaypointCoveredByAnyTile(waypoint, tiles)) {
+                if (isWaypointPinnedToLocatorBar(i)) {
+                    unpinWaypointFromLocatorBar(waypoint);
+                }
+                atlasWaypoints.remove(i);
+                atlasIcons.remove(i + 1);
+            }
+        }
+
+        cachedDimension = null;
+        cachedScale = -1;
+        updateTileCacheIfNeeded();
+
+        List<Integer> availableScales = getAvailableScales();
+        if (!availableScales.contains(activeViewScale) && !availableScales.isEmpty()) {
+            activeViewScale = availableScales.getFirst();
+            cachedDimension = null;
+            cachedScale = -1;
+            updateTileCacheIfNeeded();
+        }
+
+        rebuildScaleWidgets();
+        rebuildOverlayWidgets();
         playMapRemovalSound();
-        onClose();
+    }
+
+    private static boolean isWaypointOnTile(AtlasContents.WaypointData waypoint, AtlasTilePayload tile) {
+        if (!waypoint.dimension().equals(tile.dimension())) {
+            return false;
+        }
+        int mapSpan = 128 << tile.scale();
+        double minX = tile.centerX() - mapSpan / 2.0;
+        double minZ = tile.centerZ() - mapSpan / 2.0;
+        double maxX = minX + mapSpan;
+        double maxZ = minZ + mapSpan;
+
+        return waypoint.worldX() >= minX
+                && waypoint.worldX() < maxX
+                && waypoint.worldZ() >= minZ
+                && waypoint.worldZ() < maxZ;
+    }
+
+    private static boolean isWaypointCoveredByAnyTile(AtlasContents.WaypointData waypoint, List<AtlasTilePayload> tiles) {
+        for (AtlasTilePayload tile : tiles) {
+            if (isWaypointOnTile(waypoint, tile)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean commitWaypointDraft() {
@@ -1663,46 +1737,104 @@ public class AtlasScreen extends Screen {
         graphics.pose().popMatrix();
     }
 
-    private void renderMapTile(GuiGraphicsExtractor graphics, int mapId, float x, float y, float scale) {
+    private void renderWaypointLabel(GuiGraphicsExtractor graphics, Component name, float centerX, float centerY, int iconHeight) {
+        if (name == null || name.getString().isBlank()) {
+            return;
+        }
+
+        float textScale = 0.5f * (float) SimpleAtlasConfigManager.getWaypointIconSize();
+        int textWidth = this.font.width(name);
+        float textY = centerY + iconHeight / 2.0f + 1.5f;
+
+        graphics.pose().pushMatrix();
+        graphics.pose().translate(centerX, textY);
+        graphics.pose().scale(textScale, textScale);
+
+        int localX = -textWidth / 2;
+        graphics.textWithBackdrop(this.font, name, localX, 0, textWidth, 0xFFFFFFFF);
+
+        graphics.pose().popMatrix();
+    }
+
+    private void renderMapTile(GuiGraphicsExtractor graphics, AtlasTilePayload tile, float x, float y, float scale) {
         Minecraft minecraft = Minecraft.getInstance();
 
         if (minecraft.level == null) {
             return;
         }
 
-        MapId id = new MapId(mapId);
+        MapId id = new MapId(tile.mapId());
         MapItemSavedData data = minecraft.level.getMapData(id);
         if (data == null) {
             return;
         }
 
-        MapRenderState state = renderStates.computeIfAbsent(mapId, ignored -> new MapRenderState());
+        MapRenderState state = renderStates.computeIfAbsent(tile.mapId(), ignored -> new MapRenderState());
 
         graphics.pose().pushMatrix();
         graphics.pose().translate(x, y);
         graphics.pose().scale(scale, scale);
 
         minecraft.getMapRenderer().extractRenderState(id, data, state);
-        // AtlasScreen draws player icons itself; suppress player map markers to avoid duplicate static markers while preserving treasure, structure, and banner markers.
-        removePlayerDecorations(data, state);
+        // AtlasScreen draws player icons and waypoints itself; suppress them to avoid duplicate markers while preserving treasure and structure markers.
+        removeSuppressedDecorations(data, state, tile);
         graphics.map(state);
 
         graphics.pose().popMatrix();
     }
 
-    private static void removePlayerDecorations(MapItemSavedData data, MapRenderState state) {
+    private void removeSuppressedDecorations(MapItemSavedData data, MapRenderState state, AtlasTilePayload tile) {
         List<MapDecoration> dataDecs = new ArrayList<>();
         data.getDecorations().forEach(dataDecs::add);
         if (dataDecs.size() == state.decorations.size()) {
             for (int i = state.decorations.size() - 1; i >= 0; i--) {
                 MapDecoration dec = dataDecs.get(i);
-                if (isPlayerDecoration(dec)) {
+                if (isSuppressedDecoration(dec, tile)) {
                     state.decorations.remove(i);
                 }
             }
-        } else {
-            state.decorations.clear();
         }
+    }
+
+    private boolean isSuppressedDecoration(MapDecoration dec, AtlasTilePayload tile) {
+        if (isPlayerDecoration(dec)) {
+            return true;
+        }
+
+        // Suppress any decoration registered by simple-atlas
+        if (dec.type().unwrapKey().map(k -> k.identifier().getNamespace().equals(SimpleAtlas.MOD_ID)).orElse(false)) {
+            return true;
+        }
+
+        int scaleFactor = 1 << tile.scale();
+        String decName = dec.name().map(Component::getString).orElse(null);
+
+        for (AtlasContents.WaypointData waypoint : this.atlasWaypoints) {
+            if (!waypoint.dimension().equals(tile.dimension())) {
+                continue;
+            }
+
+            float xDelta = (float) ((waypoint.worldX() - tile.centerX()) / scaleFactor);
+            float zDelta = (float) ((waypoint.worldZ() - tile.centerZ()) / scaleFactor);
+            if (xDelta < -64.0F || xDelta > 64.0F || zDelta < -64.0F || zDelta > 64.0F) {
+                continue;
+            }
+
+            byte expectedX = AtlasWaypointDecorations.clampMapCoordinate(xDelta);
+            byte expectedY = AtlasWaypointDecorations.clampMapCoordinate(zDelta);
+
+            if (Math.abs(dec.x() - expectedX) <= 1 && Math.abs(dec.y() - expectedY) <= 1) {
+                if (decName != null && decName.equals(waypoint.name())) {
+                    return true;
+                }
+
+                Holder<MapDecorationType> expectedType = AtlasWaypointDecorations.decorationTypeForWaypoint(waypoint.iconIndex());
+                if (expectedType != null && dec.type().unwrapKey().equals(expectedType.unwrapKey())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static boolean isPlayerDecoration(MapDecoration dec) {
@@ -2117,7 +2249,7 @@ public class AtlasScreen extends Screen {
             float x = mapOriginX + (tile.tileX() - dimBounds.minTileX()) * scaledTileSize;
             float y = mapOriginY + (tile.tileY() - dimBounds.minTileY()) * scaledTileSize;
 
-            renderMapTile(graphics, tile.mapId(), x, y, scaledTileSize / 128.0f);
+            renderMapTile(graphics, tile, x, y, scaledTileSize / 128.0f);
 
             boolean hovered =
                     mouseWithinAtlasContent &&
@@ -2138,14 +2270,22 @@ public class AtlasScreen extends Screen {
             }
             // Skip waypoints not in the selected dimension
             int waypointIndexInList = iconListIndex - 1;
+            AtlasContents.WaypointData wp = null;
             if (waypointIndexInList < atlasWaypoints.size()) {
-                AtlasContents.WaypointData wp = atlasWaypoints.get(waypointIndexInList);
+                wp = atlasWaypoints.get(waypointIndexInList);
                 if (!wp.dimension().equals(selectedDimension)) {
                     continue;
                 }
             }
             AtlasIcon atlasIcon = atlasIcons.get(iconListIndex);
             atlasIcon.render(graphics, minecraft, visibleTiles, mapOriginX, mapOriginY, scaledTileSize);
+
+            if (wp != null && !wp.name().isBlank()) {
+                AtlasIcon.Anchor anchor = atlasIcon.resolveAnchor(minecraft, visibleTiles, mapOriginX, mapOriginY, scaledTileSize);
+                if (anchor != null) {
+                    renderWaypointLabel(graphics, Component.literal(wp.name()), anchor.screenX(), anchor.screenY(), atlasIcon.renderHeight());
+                }
+            }
         }
 
         renderPinnedWaypointMarkers(graphics, minecraft, mapOriginX, mapOriginY, scaledTileSize);
@@ -2156,6 +2296,11 @@ public class AtlasScreen extends Screen {
                     : Component.literal(waypointDraft.name);
             AtlasIcon draftIcon = createWaypointIcon(waypointDraft.worldX, waypointDraft.worldZ, draftTitle, waypointDraft.iconIndex);
             draftIcon.render(graphics, minecraft, visibleTiles, mapOriginX, mapOriginY, scaledTileSize);
+
+            AtlasIcon.Anchor anchor = draftIcon.resolveAnchor(minecraft, visibleTiles, mapOriginX, mapOriginY, scaledTileSize);
+            if (anchor != null) {
+                renderWaypointLabel(graphics, draftTitle, anchor.screenX(), anchor.screenY(), draftIcon.renderHeight());
+            }
         }
 
         // Draw the player marker last so it stays visible above waypoint markers.

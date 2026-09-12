@@ -7,32 +7,36 @@
 - Entrypoints in `src/main/resources/fabric.mod.json`: `main`, `client`, `modmenu`, `fabric-datagen`.
 
 ## Architecture You Should Learn First
-- Server bootstrap (`SimpleAtlas.onInitialize()`) initializes in order: `SimpleAtlasConfigManager.load()`, `ModItems`, `ModMapDecorationTypes`, `ModComponents`, `ModNetworking`, `ModCriteria`, `AtlasViewTicker`.
+- Server bootstrap (`SimpleAtlas.onInitialize()`) initializes in order: `SimpleAtlasConfigManager.load()`, `ModItems`, `ModMapDecorationTypes`, `ModComponents`, `ModNetworking`, `ModCriteria`, `ModRecipes`, `AtlasViewTicker`.
 - In-game configuration is managed by `SimpleAtlasConfigManager` / `SimpleAtlasConfig` (`maxAtlasMapCount`, `maxWaypoints`, `bannerWaypointsOnly`, `waypointIconSize`, `playerIconSize`), with GUI integration via `SimpleAtlasConfigScreen` (Cloth Config) and `SimpleAtlasModMenuIntegration` (ModMenu).
 - Atlas state is stored in `ModComponents.ATLAS_CONTENTS` using `component/AtlasContents.java`.
-- `AtlasContents` stores map IDs + waypoint state (`waypoints`, `selectedWaypointIconIndex`, `nextWaypointNumber`), `selectedScale`, enforces configured map/waypoint caps dynamically, sanitizes waypoint names/icon indices/dimensions, and retains `blankMapCount` and legacy `sub_map_ids` for codec backwards compatibility.
+- `AtlasContents` stores map IDs + waypoint state (`waypoints`, `selectedWaypointIconIndex`, `nextWaypointNumber`), `selectedScale`, active `blankMapCount`, enforces configured map/waypoint caps dynamically, sanitizes waypoint names/icon indices/dimensions, and retains legacy `sub_map_ids` for codec backwards compatibility.
 - Core gameplay logic is in `item/AtlasItem.java`:
   - `useOn` on banners creates banner-derived waypoints with duplicate-position prevention and configured waypoint limit enforcement.
-  - `use` groups maps by dimension and scale, builds layout via `AtlasLayoutBuilder.build(...)`, sends `OpenAtlasScreenPayload`, and registers active viewers in `AtlasViewManager`.
-  - `inventoryTick` keeps atlas `DataComponents.MAP_ID` synced with current position and selected scale (`AtlasMapSelector`), delegates to `Items.FILLED_MAP.inventoryTick(...)` for vanilla marker behavior, and performs multi-scale live exploration by ticking and updating all overlapping maps covering the player across all scales.
-  - `appendHoverText` displays active scale ratio (`1:X`) and lists all contained scale ratios if multiple are present.
+  - `use` auto-creates initial map if atlas has blank maps but 0 maps, groups maps by dimension and scale, builds layout via `AtlasLayoutBuilder.build(...)`, sends `OpenAtlasScreenPayload`, and registers active viewers in `AtlasViewManager`.
+  - `inventoryTick` keeps atlas `DataComponents.MAP_ID` synced with current position and selected scale (`AtlasMapSelector`), delegates to `Items.FILLED_MAP.inventoryTick(...)` for vanilla marker behavior, and performs multi-scale live exploration. When walking outside existing map bounds, if the atlas has blank maps (`blankMapCount > 0` or creative), it automatically and invisibly consumes one, generates the new grid-aligned map tile, plays `SoundEvents.UI_CARTOGRAPHY_TABLE_TAKE_RESULT`, syncs Remapped packets if loaded, and continues mapping seamlessly.
+  - `appendHoverText` displays active scale ratio (`1:X`), all contained scale ratios, and available empty maps count (`blankMapCount`).
 - Layout logic (`layout/AtlasLayoutBuilder.java`) computes `AtlasLayout` from same-scale maps using `128 << scale` span and emits per-tile grid positions.
+- Crafting recipe (`recipe/AtlasAddRecipe.java`):
+  - Special crafting recipe allowing players to insert blank maps (vanilla `Items.MAP` and Remapped `remapped:empty_map`) as well as filled maps directly into the atlas inside the 2x2 player crafting inventory or 3x3 crafting table.
 - Cartography behavior is mixin-driven (`CartographyTableMenuMixin`, `CartographyTableAdditionalSlotMixin`, `CartographyTableMapSlotMixin`, `CartographyTableResultSlotMixin`):
-  - Flexible slot routing: inputs (Atlas, Book, Filled Map, Paper, Shears) can be placed in either slot `0` or slot `1`.
+  - Flexible slot routing: inputs (Atlas, Book, Filled Map, Empty Map, Paper, Shears) can be placed in either slot `0` or slot `1`.
+  - Empty map + atlas: adds empty maps (vanilla and Remapped) to atlas `blankMapCount`, consuming the input stack on take.
   - Book + atlas: duplicate atlas.
   - Filled map + atlas: add map after dedupe and configured limits (multi-scale supported).
   - Atlas + paper: scale atlas maps up by +1 in-place using `AtlasCartographyScaler.scaleAtlas`.
   - Atlas + shears: scale atlas maps down by -1 in-place using `AtlasCartographyScaler.downscaleAtlas`. Explored quadrants are split into child maps, and shears take 1 durability damage rather than being consumed.
-  - Atlas + atlas: merge map/waypoint contents (multi-scale supported) when total map count does not exceed limit.
-- `CartographyTableMenuMixin` also intercepts `quickMoveStack` (shift-click) with intelligent routing for atlas, shears, paper, books, and filled maps, and executes scaling/downscaling upon shift-clicking the result slot. `AbstractContainerMenuInvoker` exposes `moveItemStackTo` and `broadcastChanges`.
+  - Atlas + atlas: merge map/waypoint contents and sum `blankMapCount` (multi-scale supported) when total map count does not exceed limit.
+- `CartographyTableMenuMixin` also intercepts `quickMoveStack` (shift-click) with intelligent routing for atlas, shears, paper, books, filled maps, and empty maps (vanilla and Remapped), and executes scaling/downscaling upon shift-clicking the result slot. `AbstractContainerMenuInvoker` exposes `moveItemStackTo` and `broadcastChanges`.
 - `cartography/AtlasCartographyScaler.java` handles atlas-wide scaling and downscaling:
-  - Upscale (+1): uses 1:1 real-world block scanning, heightmap sampling, fluid depth, dithering, modal downsampling, and exploration edge shading.
+  - Upscale (+1): uses 1:1 real-world block scanning, heightmap sampling, fluid depth, dithering, and modal downsampling.
   - Downscale (-1): generates child quadrant maps for explored areas with parent pixel transfer and real-world surface scanning.
   - Fully integrated with `MapModCompat` to support the `Remapped` mod palette and packet sync.
-- `CartographyTableResultSlotMixin` applies server-side post-take effects (book duplication extra copy, shears durability degradation, scale/downscale mutation) and triggers `ModCriteria.ATLAS_CARTOGRAPHY_ACTION`.
+- `CartographyTableResultSlotMixin` applies server-side post-take effects (book duplication extra copy, shears durability degradation, scale/downscale mutation, empty map stack consumption) and triggers `ModCriteria.ATLAS_CARTOGRAPHY_ACTION`.
 - Mod compatibility (`compat/MapModCompat.java`):
   - Detects if `remapped` (`dev.worldgen.remapped`) is loaded via reflection.
-  - Synchronizes custom remapped colors, custom block color matching, dithering, and custom network packets during cartography scaling, held map ticking, and atlas viewing.
+  - Detects empty maps via `isEmptyMap` and `isRemappedEmptyMap` for `remapped:empty_map`.
+  - Synchronizes custom remapped colors, custom block color matching, dithering, and custom network packets during cartography scaling, held map ticking, auto-creation, and atlas viewing.
 - Live map sync:
   - `AtlasViewManager` tracks active viewers.
   - `AtlasViewTicker` pushes updates every 10 ticks for active atlas viewers and closes active view if atlas leaves player's hands (sending vanilla and remapped packets).

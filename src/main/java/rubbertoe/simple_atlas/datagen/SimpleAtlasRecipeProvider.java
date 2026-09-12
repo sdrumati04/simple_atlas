@@ -8,6 +8,7 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.data.recipes.RecipeCategory;
 import net.minecraft.data.recipes.RecipeOutput;
 import net.minecraft.data.recipes.RecipeProvider;
+import net.minecraft.data.recipes.SpecialRecipeBuilder;
 import net.minecraft.world.item.Items;
 import org.jspecify.annotations.NonNull;
 import rubbertoe.simple_atlas.item.ModItems;
@@ -29,6 +30,8 @@ public class SimpleAtlasRecipeProvider extends FabricRecipeProvider {
                         .requires(Items.MAP)
                         .unlockedBy(getHasName(Items.MAP), has(Items.MAP))
                         .save(output);
+
+                SpecialRecipeBuilder.special(rubbertoe.simple_atlas.recipe.AtlasAddRecipe::new).save(output, "atlas_add");
             }
         };
     }

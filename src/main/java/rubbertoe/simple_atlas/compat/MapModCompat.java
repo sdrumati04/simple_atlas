@@ -10,7 +10,11 @@ import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;
@@ -132,7 +136,11 @@ public final class MapModCompat {
                 List<CustomPacketPayload> packets = (List<CustomPacketPayload>) getRemappedPacketsMethod.invoke(mapData, mapId, player);
                 if (packets != null) {
                     for (CustomPacketPayload packet : packets) {
-                        ServerPlayNetworking.send(player, packet);
+                        // Exclude Remapped's BaseMapUpdatePacket which carries unaugmented vanilla decorations
+                        // and clears client-side atlas waypoints.
+                        if (packet != null && !"base_map_update".equals(packet.type().id().getPath())) {
+                            ServerPlayNetworking.send(player, packet);
+                        }
                     }
                 }
             } catch (Throwable ignored) {
@@ -213,5 +221,23 @@ public final class MapModCompat {
             }
         }
         return null;
+    }
+
+    public static boolean isEmptyMap(@Nullable ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return false;
+        }
+        if (stack.is(Items.MAP)) {
+            return true;
+        }
+        return isRemappedEmptyMap(stack);
+    }
+
+    public static boolean isRemappedEmptyMap(@Nullable ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return false;
+        }
+        Identifier id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        return id != null && id.getNamespace().equals("remapped") && id.getPath().equals("empty_map");
     }
 }

@@ -22,6 +22,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import rubbertoe.simple_atlas.component.AtlasContents;
 import rubbertoe.simple_atlas.cartography.AtlasCartographyScaler;
+import rubbertoe.simple_atlas.cartography.AtlasCartographyTakeHandler;
+import rubbertoe.simple_atlas.compat.MapModCompat;
 import rubbertoe.simple_atlas.component.ModComponents;
 import rubbertoe.simple_atlas.config.SimpleAtlasConfigManager;
 import rubbertoe.simple_atlas.item.ModItems;
@@ -52,8 +54,34 @@ public abstract class CartographyTableMenuMixin {
 
             if (!ItemStack.matches(result, resultStack)) {
                 this.resultContainer.setItem(2, result);
-                ((CartographyTableMenu) (Object) this).broadcastChanges();
             }
+            ci.cancel();
+            return;
+        }
+
+        // ── Empty map + atlas → add blank maps to the atlas ──────────────────
+        boolean isEmptyMapAndAtlas = (MapModCompat.isEmptyMap(mapStack) && additionalStack.is(ModItems.ATLAS))
+                || (mapStack.is(ModItems.ATLAS) && MapModCompat.isEmptyMap(additionalStack));
+        if (isEmptyMapAndAtlas) {
+            ItemStack mapInput = MapModCompat.isEmptyMap(mapStack) ? mapStack : additionalStack;
+            ItemStack atlasInput = mapStack.is(ModItems.ATLAS) ? mapStack : additionalStack;
+
+            AtlasContents contents = atlasInput.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+            int addCount = mapInput.getCount();
+            if (addCount <= 0) {
+                simple_atlas$rejectAtlasResult();
+                ci.cancel();
+                return;
+            }
+
+            ItemStack result = atlasInput.copyWithCount(1);
+            AtlasContents updatedContents = contents.withAddedBlankMaps(addCount);
+            result.set(ModComponents.ATLAS_CONTENTS, updatedContents);
+
+            if (!ItemStack.matches(result, resultStack)) {
+                this.resultContainer.setItem(2, result);
+            }
+
             ci.cancel();
             return;
         }
@@ -95,7 +123,6 @@ public abstract class CartographyTableMenuMixin {
 
                 if (!ItemStack.matches(result, resultStack)) {
                     this.resultContainer.setItem(2, result);
-                    ((CartographyTableMenu) (Object) this).broadcastChanges();
                 }
             });
 
@@ -121,7 +148,6 @@ public abstract class CartographyTableMenuMixin {
                 result.set(ModComponents.ATLAS_CONTENTS, contents.withSelectedScale(targetScale + 1));
                 if (!ItemStack.matches(result, resultStack)) {
                     this.resultContainer.setItem(2, result);
-                    ((CartographyTableMenu) (Object) this).broadcastChanges();
                 }
             });
 
@@ -147,7 +173,6 @@ public abstract class CartographyTableMenuMixin {
                 result.set(ModComponents.ATLAS_CONTENTS, contents.withSelectedScale(targetScale - 1));
                 if (!ItemStack.matches(result, resultStack)) {
                     this.resultContainer.setItem(2, result);
-                    ((CartographyTableMenu) (Object) this).broadcastChanges();
                 }
             });
 
@@ -160,25 +185,39 @@ public abstract class CartographyTableMenuMixin {
             AtlasContents topContents = mapStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
             AtlasContents bottomContents = additionalStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
-            this.access.execute((level, _) -> {
-                LinkedHashSet<Integer> mergedMapIds = new LinkedHashSet<>(bottomContents.mapIds());
-                mergedMapIds.addAll(topContents.mapIds());
-                int mergedMapCount = mergedMapIds.size();
-                if (mergedMapCount > SimpleAtlasConfigManager.getMaxAtlasMapCount()) {
-                    simple_atlas$rejectAtlasResult();
-                    return;
-                }
+            LinkedHashSet<Integer> mergedMapIds = new LinkedHashSet<>(bottomContents.mapIds());
+            mergedMapIds.addAll(topContents.mapIds());
+            int mergedMapCount = mergedMapIds.size();
+            if (mergedMapCount > SimpleAtlasConfigManager.getMaxAtlasMapCount()) {
+                simple_atlas$rejectAtlasResult();
+                ci.cancel();
+                return;
+            }
 
-                AtlasContents merged = simple_atlas$mergeAtlasContents(bottomContents, topContents);
-                ItemStack result = additionalStack.copyWithCount(1);
-                result.set(ModComponents.ATLAS_CONTENTS, merged);
+            LinkedHashSet<AtlasContents.WaypointData> mergedWaypoints = new LinkedHashSet<>(bottomContents.waypoints());
+            mergedWaypoints.addAll(topContents.waypoints());
+            int mergedWaypointCount = mergedWaypoints.size();
+            if (mergedWaypointCount > SimpleAtlasConfigManager.getMaxWaypoints()) {
+                simple_atlas$rejectAtlasResult();
+                ci.cancel();
+                return;
+            }
 
-                if (!ItemStack.matches(result, resultStack)) {
-                    this.resultContainer.setItem(2, result);
-                    ((CartographyTableMenu) (Object) this).broadcastChanges();
-                }
-            });
+            AtlasContents merged = simple_atlas$mergeAtlasContents(bottomContents, topContents);
+            ItemStack result = additionalStack.copyWithCount(1);
+            result.set(ModComponents.ATLAS_CONTENTS, merged);
 
+            if (!ItemStack.matches(result, resultStack)) {
+                this.resultContainer.setItem(2, result);
+            }
+
+            ci.cancel();
+            return;
+        }
+
+        // ── Fallback for Atlas: any combination involving an Atlas that is not valid ──
+        if (mapStack.is(ModItems.ATLAS) || additionalStack.is(ModItems.ATLAS)) {
+            simple_atlas$rejectAtlasResult();
             ci.cancel();
             return;
         }
@@ -192,24 +231,34 @@ public abstract class CartographyTableMenuMixin {
         LinkedHashSet<AtlasContents.WaypointData> mergedWaypoints = new LinkedHashSet<>(base.waypoints());
         mergedWaypoints.addAll(incoming.waypoints());
 
+        int maxWaypoints = SimpleAtlasConfigManager.getMaxWaypoints();
+        List<AtlasContents.WaypointData> waypointList = new ArrayList<>();
+        for (AtlasContents.WaypointData waypoint : mergedWaypoints) {
+            if (waypointList.size() >= maxWaypoints) {
+                break;
+            }
+            waypointList.add(waypoint);
+        }
+
         int selectedIcon = base.selectedWaypointIconIndex();
         int nextWaypointNumber = Math.max(base.nextWaypointNumber(), incoming.nextWaypointNumber());
         int selectedScale = base.selectedScale() >= 0 ? base.selectedScale() : incoming.selectedScale();
 
         return new AtlasContents(
                 List.copyOf(mergedMapIds),
-                new ArrayList<>(mergedWaypoints),
+                waypointList,
                 selectedIcon,
                 nextWaypointNumber,
-                0,
+                base.blankMapCount() + incoming.blankMapCount(),
                 selectedScale
         );
     }
 
     @Unique
     private void simple_atlas$rejectAtlasResult() {
-        this.resultContainer.removeItemNoUpdate(2);
-        ((CartographyTableMenu) (Object) this).broadcastChanges();
+        if (!this.resultContainer.getItem(2).isEmpty()) {
+            this.resultContainer.setItem(2, ItemStack.EMPTY);
+        }
     }
 
     @Inject(method = "quickMoveStack", at = @At("HEAD"), cancellable = true)
@@ -233,32 +282,15 @@ public abstract class CartographyTableMenuMixin {
             ItemStack slot0 = menu.container.getItem(0);
             ItemStack slot1 = menu.container.getItem(1);
 
-            // Handle scale take:
-            boolean isScale = (slot0.is(ModItems.ATLAS) && slot1.is(Items.PAPER))
-                    || (slot0.is(Items.PAPER) && slot1.is(ModItems.ATLAS));
-            if (isScale && player instanceof ServerPlayer serverPlayer) {
-                ItemStack atlas = slot0.is(ModItems.ATLAS) ? slot0 : slot1;
-                AtlasContents original = atlas.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
-                AtlasContents scaled = AtlasCartographyScaler.scaleAtlas(serverPlayer.level(), original);
-                if (scaled != null) {
-                    stack.set(ModComponents.ATLAS_CONTENTS, scaled);
-                }
-            }
-
-            // Handle scale down (Shears):
-            boolean isDownscale = (slot0.is(ModItems.ATLAS) && slot1.is(Items.SHEARS))
-                    || (slot0.is(Items.SHEARS) && slot1.is(ModItems.ATLAS));
-            if (isDownscale && player instanceof ServerPlayer serverPlayer) {
-                ItemStack atlas = slot0.is(ModItems.ATLAS) ? slot0 : slot1;
-                AtlasContents original = atlas.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
-                AtlasContents downscaled = AtlasCartographyScaler.downscaleAtlas(serverPlayer.level(), original);
-                if (downscaled != null) {
-                    stack.set(ModComponents.ATLAS_CONTENTS, downscaled);
-                }
+            ItemStack unscaledCopy = stack.copy();
+            if (player instanceof ServerPlayer serverPlayer) {
+                AtlasCartographyTakeHandler.scaleOrDownscaleAtlas(serverPlayer.level(), slot0, slot1, stack);
             }
 
             // Move to player inventory
             if (!((AbstractContainerMenuInvoker) this).simple_atlas$invokeMoveItemStackTo(stack, 3, 39, true)) {
+                slot.setByPlayer(unscaledCopy);
+                slot.setChanged();
                 cir.setReturnValue(ItemStack.EMPTY);
                 return;
             }
@@ -309,6 +341,12 @@ public abstract class CartographyTableMenuMixin {
 
             if (stack.is(Items.FILLED_MAP)) {
                 if (simple_atlas$moveStackToSlots(slot, stack, clicked, player, cir, 0, 1, 1, 2)) {
+                    return;
+                }
+            }
+
+            if (MapModCompat.isEmptyMap(stack)) {
+                if (simple_atlas$moveStackToSlots(slot, stack, clicked, player, cir, 1, 2, 0, 1)) {
                     return;
                 }
             }

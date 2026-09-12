@@ -8,6 +8,8 @@
     "CartographyTableMapSlotMixin",
     "CartographyTableMenuMixin",
     "CartographyTableResultSlotMixin",
+    "HoldingPlayerAccessor",
+    "ResultSlotMixin",
     "ServerPlayerMixin"
   ],
   "client": [

@@ -26,6 +26,7 @@ import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 import net.minecraft.world.item.MapItem;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
@@ -42,6 +43,7 @@ import rubbertoe.simple_atlas.navigation.WaypointIconCatalog;
 import rubbertoe.simple_atlas.network.AtlasTilePayload;
 import rubbertoe.simple_atlas.network.ModNetworking;
 import rubbertoe.simple_atlas.network.OpenAtlasScreenPayload;
+import rubbertoe.simple_atlas.server.AtlasWaypointDecorations;
 import rubbertoe.simple_atlas.map.AtlasMapSelector;
 import rubbertoe.simple_atlas.server.AtlasViewManager;
 import rubbertoe.simple_atlas.cartography.AtlasCartographyScaler;
@@ -152,6 +154,13 @@ public class AtlasItem extends Item {
                 }
             }
         }
+
+        if (contents.blankMapCount() > 0) {
+            tooltipComponents.accept(
+                    Component.translatable("tooltip.simple_atlas.blank_maps", contents.blankMapCount())
+                            .withStyle(ChatFormatting.GRAY)
+            );
+        }
     }
 
     @Override
@@ -167,6 +176,15 @@ public class AtlasItem extends Item {
                 ModComponents.ATLAS_CONTENTS,
                 AtlasContents.EMPTY
         );
+
+        if (contents.mapIds().isEmpty()) {
+            if ((contents.blankMapCount() > 0 || player.isCreative()) && contents.canAddMapId()) {
+                Integer firstMapId = autoCreateMap(player, atlasStack, serverLevel, contents);
+                if (firstMapId != null) {
+                    contents = atlasStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                }
+            }
+        }
 
         if (contents.mapIds().isEmpty()) {
             player.sendSystemMessage(
@@ -198,10 +216,6 @@ public class AtlasItem extends Item {
         }
 
         AtlasContents contents = stack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
-        if (contents.mapIds().isEmpty()) {
-            removeMapIdIfPresent(stack);
-            return;
-        }
 
         MapId existingId = stack.get(DataComponents.MAP_ID);
         Integer preferredRawId = existingId != null ? existingId.id() : null;
@@ -213,6 +227,16 @@ public class AtlasItem extends Item {
                 preferredRawId,
                 contents.selectedScale()
         );
+
+        if (currentMapRawId == null) {
+            if ((contents.blankMapCount() > 0 || player.isCreative()) && contents.canAddMapId()) {
+                currentMapRawId = autoCreateMap(player, stack, level, contents);
+                if (currentMapRawId != null) {
+                    contents = stack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                }
+            }
+        }
+
         if (currentMapRawId == null) {
             removeMapIdIfPresent(stack);
             return;
@@ -241,7 +265,7 @@ public class AtlasItem extends Item {
             }
         }
         for (MapItemSavedData overlappingMap : mapsByScale.values()) {
-            overlappingMap.tickCarriedBy(player, stack, null);
+            overlappingMap.getHoldingPlayer(player);
             ((MapItem) Items.FILLED_MAP).update(level, player, overlappingMap);
         }
     }
@@ -307,6 +331,12 @@ public class AtlasItem extends Item {
             // Send full map patch directly to client without marking map dirty on disk
             List<net.minecraft.world.level.saveddata.maps.MapDecoration> currentDecorations = new ArrayList<>();
             mapData.getDecorations().forEach(currentDecorations::add);
+            for (AtlasContents.WaypointData waypoint : contents.waypoints()) {
+                net.minecraft.world.level.saveddata.maps.MapDecoration decoration = AtlasWaypointDecorations.toDecoration(mapData, waypoint);
+                if (decoration != null) {
+                    currentDecorations.add(decoration);
+                }
+            }
             Packet<?> packet = new net.minecraft.network.protocol.game.ClientboundMapItemDataPacket(
                     mapId,
                     mapData.scale,
@@ -338,6 +368,67 @@ public class AtlasItem extends Item {
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber() + 1
         );
+    }
+
+    public static @Nullable Integer autoCreateMap(Player player, ItemStack atlasStack, ServerLevel level, AtlasContents contents) {
+        if (!contents.canAddMapId()) {
+            return null;
+        }
+        if (contents.blankMapCount() <= 0 && !player.isCreative()) {
+            return null;
+        }
+
+        int targetScale = contents.selectedScale() >= 0 ? contents.selectedScale() : 0;
+        if (contents.selectedScale() < 0 && !contents.mapIds().isEmpty()) {
+            for (int rawId : contents.mapIds()) {
+                MapItemSavedData data = level.getMapData(new MapId(rawId));
+                if (data != null && data.dimension.equals(level.dimension())) {
+                    targetScale = data.scale;
+                    break;
+                }
+            }
+        }
+        if (targetScale < 0) {
+            targetScale = 0;
+        }
+
+        int blockX = (int) Math.floor(player.getX());
+        int blockZ = (int) Math.floor(player.getZ());
+        ItemStack newMapStack = MapItem.create(level, blockX, blockZ, (byte) targetScale, true, false);
+        MapId newMapId = newMapStack.get(DataComponents.MAP_ID);
+        if (newMapId == null) {
+            return null;
+        }
+
+        int newBlankCount = player.isCreative() ? contents.blankMapCount() : Math.max(0, contents.blankMapCount() - 1);
+        AtlasContents updated = contents
+                .withBlankMapCount(newBlankCount)
+                .withAdded(newMapId.id());
+        if (contents.selectedScale() < 0) {
+            updated = updated.withSelectedScale(targetScale);
+        }
+        atlasStack.set(ModComponents.ATLAS_CONTENTS, updated);
+        atlasStack.set(DataComponents.MAP_ID, newMapId);
+
+        level.playSound(
+                null,
+                player.getX(),
+                player.getY(),
+                player.getZ(),
+                SoundEvents.UI_CARTOGRAPHY_TABLE_TAKE_RESULT,
+                SoundSource.PLAYERS,
+                1.0f,
+                1.0f
+        );
+
+        if (player instanceof ServerPlayer serverPlayer) {
+            MapItemSavedData mapData = level.getMapData(newMapId);
+            if (mapData != null) {
+                MapModCompat.sendRemappedPackets(serverPlayer, newMapId, mapData);
+            }
+        }
+
+        return newMapId.id();
     }
 
     private static void removeMapIdIfPresent(ItemStack stack) {

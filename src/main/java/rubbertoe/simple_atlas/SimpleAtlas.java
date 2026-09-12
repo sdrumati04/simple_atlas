@@ -9,6 +9,7 @@ import rubbertoe.simple_atlas.config.SimpleAtlasConfigManager;
 import rubbertoe.simple_atlas.item.ModItems;
 import rubbertoe.simple_atlas.map.ModMapDecorationTypes;
 import rubbertoe.simple_atlas.network.ModNetworking;
+import rubbertoe.simple_atlas.recipe.ModRecipes;
 import rubbertoe.simple_atlas.server.AtlasViewTicker;
 
 public class SimpleAtlas implements ModInitializer {
@@ -23,6 +24,7 @@ public class SimpleAtlas implements ModInitializer {
 		ModComponents.initialize();
 		ModNetworking.initialize();
 		ModCriteria.initialize();
+		ModRecipes.initialize();
 		AtlasViewTicker.initialize();
 		LOGGER.info("Simple Atlas initialized.");
 	}

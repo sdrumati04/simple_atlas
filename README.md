@@ -8,13 +8,17 @@ Simple Atlas adds an **Atlas** item that stores multiple filled maps and opens i
 
 ### Atlas item & Cartography Table
 
-- **Craft an Atlas** and add filled maps through the cartography table.
-- **Flexible Cartography Table Routing:** Ingredients can be placed in either the primary (top) or secondary (bottom) slot.
-- **Scale Up (Paper):** Combine an Atlas with paper to scale up all maps by one level (+1). The process employs 1:1 real-world block scanning, high-fidelity modal downsampling, and edge shading.
+- **Craft an Atlas** and add filled maps or empty maps through the cartography table or directly via crafting grids.
+- **Crafting Grid Map Insertion:** Combine an Atlas with filled maps or empty maps directly in the 2x2 player crafting inventory or a 3x3 crafting table to insert them quickly on the go.
+- **Empty Map Storage & Seamless Auto-Mapping:** Store blank maps inside the Atlas. When you walk outside your explored map boundaries while carrying the Atlas, it automatically consumes a stored blank map, creates the new grid-aligned map tile, and continues recording your adventure seamlessly.
+- **Instant First Map Auto-Creation:** Opening an Atlas that contains stored blank maps (even with 0 filled maps) automatically generates and centers your starting map.
+- **Main-Hand & Off-Hand Usability:** Carry and use an Atlas in either hand, with full interactive screen support, live exploration, and syncing.
+- **Flexible Cartography Table Routing:** Ingredients can be placed in either the primary (top) or secondary (bottom) slot, with intelligent shift-click (Quick Move) routing.
+- **Scale Up (Paper):** Combine an Atlas with paper to scale up all maps by one level (+1). The process employs 1:1 real-world block scanning and high-fidelity modal downsampling, preserving explored boundaries without destructive edge erosion.
 - **Scale Down (Shears):** Combine an Atlas with shears to downscale maps by one level (-1). Each explored quadrant is split into child maps, and the shears consume 1 durability point rather than being destroyed.
 - **Duplicate (Book):** Combine an Atlas with a book at the cartography table to produce an identical duplicate copy.
-- **Merge Atlases:** Combine two atlases to merge their maps and waypoints into one atlas (multi-scale supported, up to the configured map limit).
-- **Multi-Scale Atlas Support & Tooltips:** An atlas can store maps across multiple scales. Hovering over an atlas displays the currently active scale (`Scale: 1:X`) as well as all available scales contained inside.
+- **Merge Atlases:** Combine two atlases to merge their maps, waypoints, and stored blank maps into one atlas (multi-scale supported, up to the configured limits).
+- **Multi-Scale Atlas Support & Tooltips:** An atlas can store maps across multiple scales. Hovering over an atlas displays the currently active scale (`Scale: 1:X`), all available scales contained inside, and the number of stored empty maps available for automatic exploration.
 
 ### Interactive World Map
 
@@ -28,10 +32,11 @@ Simple Atlas adds an **Atlas** item that stores multiple filled maps and opens i
 ### Waypoints
 
 - **Create Waypoints:** Right-click on the atlas to place new custom waypoints.
+- **In-Map Waypoint Labels:** Waypoints display their custom names directly beneath their icons on the atlas with clean, proportional typography (`0.5x` scale matching vanilla map text) that stays sharp, legible, and uncrowded at any zoom level.
 - **Banner Waypoints:** Use an atlas on a placed banner in-world to create a waypoint matching the banner's name and color.
 - **Context Actions:** Right-click existing waypoints to edit, change icons, delete, copy coordinates, or teleport (if server permissions allow).
 - **Icon Selector:** Built-in catalog of custom icons (settlements, points of interest, ores, markers, and colored banners).
-- **Map Removal:** Right-click a mapped tile in the atlas to remove the map from the atlas and return the filled map item to your inventory.
+- **Map Removal:** Right-click a mapped tile in the atlas to remove the map from the atlas and return the filled map item to your inventory without closing the screen (remaining tiles and waypoints update dynamically in real time).
 
 ### Navigation Compass
 
@@ -39,11 +44,12 @@ Simple Atlas adds an **Atlas** item that stores multiple filled maps and opens i
 - Multiple waypoints can be pinned simultaneously.
 - Choose **Stop Locating** to remove the pin.
 
-### Multi-Scale Live Exploration & Sync
+### Multi-Scale Live Exploration & Mod Compatibility
 
 - **Simultaneous Multi-Scale Exploration:** While carrying an atlas, player exploration simultaneously explores and updates all overlapping maps across all stored scales in the atlas.
 - **Live Sync:** Atlas map data is synced live from the server to active viewers.
-- **Remapped Mod Compatibility:** Built-in compatibility with the [Remapped](https://modrinth.com/mod/remapped) mod (`dev.worldgen.remapped`), preserving high-fidelity block palette colors, dithering, and custom network packets during exploration and cartography operations.
+- **Remapped Mod Compatibility:** Built-in compatibility with the [Remapped](https://modrinth.com/mod/remapped) mod (`dev.worldgen.remapped`), preserving high-fidelity 16-bit block palette colors, dithering, empty map types, and custom network packets during live exploration and cartography operations.
+- **Immersive Overlays Mod Compatibility:** Automatic integration with [Immersive Overlays](https://modrinth.com/mod/immersiveoverlays) — displays biome overlays when carrying an Atlas and ensures smooth waypoint navigation on the compass bar.
 
 ### Configuration
 
@@ -67,16 +73,17 @@ Includes custom advancements under the **Adventure** tab:
 ## How to use
 
 1. Craft an Atlas (shapeless: book + filled map, or as configured).
-2. Insert filled maps into the Atlas using the Cartography Table.
+2. Insert filled maps or blank maps into the Atlas using the Cartography Table or any Crafting Grid (including the 2x2 player inventory grid).
 3. In the Cartography Table, you can also:
    - Scale up using **Paper**
    - Scale down using **Shears**
    - Duplicate using a **Book**
    - Merge another Atlas (multi-scale supported)
 4. Hold the Atlas in either hand and use (right-click) it to open the interactive screen.
-5. Zoom, pan, switch map scales, and browse dimensions using bookmark tabs.
-6. Right-click map locations to create waypoints, copy coordinates, or remove individual maps.
-7. Locate waypoints on your HUD locator bar for effortless navigation.
+5. While adventuring, carrying an Atlas with stored blank maps will automatically generate and map new tiles as you travel!
+6. Zoom, pan, switch map scales, and browse dimensions using bookmark tabs.
+7. Right-click map locations to create waypoints, copy coordinates, or remove individual maps.
+8. Locate waypoints on your HUD locator bar for effortless navigation.
 
 ## Recipe
 
@@ -91,7 +98,8 @@ Includes custom advancements under the **Adventure** tab:
 - **Fabric API:** Required (`>= 0.152.2+26.2`)
 - **Cloth Config:** Required (`>= 26.2.155`)
 - **ModMenu:** Optional / Recommended (`>= 20.0.0-beta.2`)
-- **Remapped:** Optional mod compatibility
+- **Remapped:** Optional mod compatibility (`dev.worldgen.remapped`)
+- **Immersive Overlays:** Optional mod compatibility (`cc.cassian.immersiveoverlays`)
 
 ## Notes
 

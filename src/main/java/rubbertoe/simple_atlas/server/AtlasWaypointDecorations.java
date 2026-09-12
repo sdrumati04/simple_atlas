@@ -7,6 +7,7 @@ import net.minecraft.network.protocol.game.ClientboundMapItemDataPacket;
 import net.minecraft.world.level.saveddata.maps.MapDecoration;
 import net.minecraft.world.level.saveddata.maps.MapDecorationType;
 import net.minecraft.world.level.saveddata.maps.MapDecorationTypes;
+import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 import rubbertoe.simple_atlas.component.AtlasContents;
 import rubbertoe.simple_atlas.map.ModMapDecorationTypes;
@@ -18,6 +19,36 @@ import java.util.Optional;
 
 public final class AtlasWaypointDecorations {
     private AtlasWaypointDecorations() {}
+
+    public static Packet<?> createFullWaypointPacket(
+            MapId mapId,
+            MapItemSavedData mapData,
+            AtlasContents contents
+    ) {
+        List<MapDecoration> merged = new ArrayList<>();
+        mapData.getDecorations().forEach(merged::add);
+        for (AtlasContents.WaypointData waypoint : contents.waypoints()) {
+            MapDecoration decoration = toDecoration(mapData, waypoint);
+            if (decoration != null) {
+                merged.add(decoration);
+            }
+        }
+        return new ClientboundMapItemDataPacket(
+                mapId,
+                mapData.scale,
+                mapData.locked,
+                Optional.of(merged),
+                Optional.empty()
+        );
+    }
+
+    public static Packet<?> withAtlasWaypointDecorations(
+            Packet<?> packet,
+            MapItemSavedData mapData,
+            AtlasContents contents
+    ) {
+        return withAtlasWaypointDecorations(packet, mapData, contents, true);
+    }
 
     public static Packet<?> withAtlasWaypointDecorations(
             Packet<?> packet,
@@ -45,7 +76,7 @@ public final class AtlasWaypointDecorations {
         List<MapDecoration> merged = new ArrayList<>(decorations.orElseGet(List::of));
         for (AtlasContents.WaypointData waypoint : contents.waypoints()) {
             MapDecoration decoration = toDecoration(mapData, waypoint);
-            if (decoration != null) {
+            if (decoration != null && !merged.contains(decoration)) {
                 merged.add(decoration);
             }
         }
@@ -59,7 +90,7 @@ public final class AtlasWaypointDecorations {
         );
     }
 
-    private static MapDecoration toDecoration(MapItemSavedData mapData, AtlasContents.WaypointData waypoint) {
+    public static MapDecoration toDecoration(MapItemSavedData mapData, AtlasContents.WaypointData waypoint) {
         if (!mapData.dimension.identifier().toString().equals(waypoint.dimension())) {
             return null;
         }
@@ -68,7 +99,7 @@ public final class AtlasWaypointDecorations {
         float xDeltaFromCenter = (float) ((waypoint.worldX() - mapData.centerX) / scaleFactor);
         float zDeltaFromCenter = (float) ((waypoint.worldZ() - mapData.centerZ) / scaleFactor);
 
-        if (xDeltaFromCenter < -63.0F || xDeltaFromCenter > 63.0F || zDeltaFromCenter < -63.0F || zDeltaFromCenter > 63.0F) {
+        if (xDeltaFromCenter < -64.0F || xDeltaFromCenter > 64.0F || zDeltaFromCenter < -64.0F || zDeltaFromCenter > 64.0F) {
             return null;
         }
 
@@ -82,17 +113,18 @@ public final class AtlasWaypointDecorations {
         );
     }
 
-    private static byte clampMapCoordinate(float deltaFromCenter) {
-        if (deltaFromCenter <= -63.0F) {
+    public static byte clampMapCoordinate(float deltaFromCenter) {
+        float coord = deltaFromCenter * 2.0F;
+        if (coord <= -128.0F) {
             return -128;
         }
-        if (deltaFromCenter >= 63.0F) {
+        if (coord >= 127.0F) {
             return 127;
         }
-        return (byte) (deltaFromCenter * 2.0F + 0.5F);
+        return (byte) Math.round(coord);
     }
 
-    private static Holder<MapDecorationType> decorationTypeForWaypoint(int iconIndex) {
+    public static Holder<MapDecorationType> decorationTypeForWaypoint(int iconIndex) {
         String key = WaypointIconCatalog.getAvailableIconKeys().get(WaypointIconCatalog.sanitizeIconIndex(iconIndex));
         return switch (key) {
             case "home" -> ModMapDecorationTypes.HOME;

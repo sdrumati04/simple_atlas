@@ -100,6 +100,8 @@ public final class ModNetworking {
                         } else {
                             atlasStack.remove(DataComponents.MAP_ID);
                         }
+
+                        refreshHeldAtlasWaypoints(player);
                     }
                 })
         );
@@ -199,9 +201,20 @@ public final class ModNetworking {
                     }
 
                     atlasStack.set(ModComponents.ATLAS_CONTENTS, updated);
+                    net.minecraft.world.level.saveddata.maps.MapId heldMapId = atlasStack.get(net.minecraft.core.component.DataComponents.MAP_ID);
+                    if (heldMapId != null && heldMapId.id() == payload.mapId()) {
+                        atlasStack.remove(net.minecraft.core.component.DataComponents.MAP_ID);
+                    }
                     giveRemovedMapToPlayer(player, payload.mapId());
                     sendMapRefreshWithoutAtlasWaypoints(player, payload.mapId());
                     reconcilePinnedWaypoints(player, updated.waypoints());
+                    if (AtlasViewManager.isViewing(player)) {
+                        if (updated.mapIds().isEmpty()) {
+                            AtlasViewManager.stopViewing(player);
+                        } else {
+                            AtlasViewManager.startViewing(player, updated.mapIds());
+                        }
+                    }
                     sendImmediateWaypointRefresh(player, updated);
                 })
         );
@@ -384,6 +397,7 @@ public final class ModNetworking {
                 filteredWaypoints,
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
+                contents.blankMapCount(),
                 contents.selectedScale()
         );
     }
@@ -460,17 +474,7 @@ public final class ModNetworking {
             }
 
             mapData.getHoldingPlayer(player);
-            Packet<?> packet = mapData.getUpdatePacket(mapId, player);
-
-            // Force a one-shot packet when vanilla has no dirty update, so waypoint edits apply instantly.
-            if (packet == null) {
-                List<MapDecoration> currentDecorations = new ArrayList<>();
-                mapData.getDecorations().forEach(currentDecorations::add);
-                packet = new ClientboundMapItemDataPacket(mapId, mapData.scale, mapData.locked, currentDecorations, null);
-            }
-
-            boolean includeAtlasWaypoints = !AtlasViewManager.isViewing(player);
-            Packet<?> augmentedPacket = AtlasWaypointDecorations.withAtlasWaypointDecorations(packet, mapData, contents, includeAtlasWaypoints);
+            Packet<?> augmentedPacket = AtlasWaypointDecorations.createFullWaypointPacket(mapId, mapData, contents);
             if (augmentedPacket != null) {
                 player.connection.send(augmentedPacket);
             }

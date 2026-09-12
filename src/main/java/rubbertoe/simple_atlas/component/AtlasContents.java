@@ -13,7 +13,7 @@ import java.util.SequencedSet;
 
 public final class AtlasContents {
     public static final int HARD_MAX_ATLAS_MAP_COUNT = SimpleAtlasConfig.MAX_ATLAS_MAP_COUNT;
-    public static final AtlasContents EMPTY = new AtlasContents(List.of(), List.of(), 0, 1, 0);
+    public static final AtlasContents EMPTY = new AtlasContents(List.of(), List.of(), 0, 1, 0, -1);
     public static final String DEFAULT_DIMENSION = "minecraft:overworld";
 
     private static final int MAX_WAYPOINT_NAME_LENGTH = 32;
@@ -73,16 +73,6 @@ public final class AtlasContents {
             List<WaypointData> waypoints,
             int selectedWaypointIconIndex,
             int nextWaypointNumber,
-            int blankMapCount
-    ) {
-        this(mapIds, waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, -1);
-    }
-
-    public AtlasContents(
-            List<Integer> mapIds,
-            List<WaypointData> waypoints,
-            int selectedWaypointIconIndex,
-            int nextWaypointNumber,
             int blankMapCount,
             int selectedScale
     ) {
@@ -90,8 +80,7 @@ public final class AtlasContents {
         this.waypoints = List.copyOf(waypoints);
         this.selectedWaypointIconIndex = Math.max(0, selectedWaypointIconIndex);
         this.nextWaypointNumber = Math.max(1, nextWaypointNumber);
-        // Legacy compatibility field: blank-map inventory is no longer used.
-        this.blankMapCount = 0;
+        this.blankMapCount = Math.max(0, blankMapCount);
         this.selectedScale = selectedScale;
     }
 
@@ -181,6 +170,28 @@ public final class AtlasContents {
         return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale);
     }
 
+    public AtlasContents withBlankMapCount(int count) {
+        int sanitized = Math.max(0, count);
+        if (this.blankMapCount == sanitized) {
+            return this;
+        }
+        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, sanitized, selectedScale);
+    }
+
+    public AtlasContents withAddedBlankMaps(int amount) {
+        if (amount <= 0) {
+            return this;
+        }
+        return withBlankMapCount(this.blankMapCount + amount);
+    }
+
+    public AtlasContents withConsumedBlankMap() {
+        if (this.blankMapCount <= 0) {
+            return this;
+        }
+        return withBlankMapCount(this.blankMapCount - 1);
+    }
+
     public boolean canAddMapId() {
         return mapIdSet.size() < configuredMapLimit();
     }
@@ -243,16 +254,17 @@ public final class AtlasContents {
                 && waypoints.equals(other.waypoints)
                 && selectedWaypointIconIndex == other.selectedWaypointIconIndex
                 && nextWaypointNumber == other.nextWaypointNumber
+                && blankMapCount == other.blankMapCount
                 && selectedScale == other.selectedScale;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(mapIdSet, waypoints, selectedWaypointIconIndex, nextWaypointNumber, selectedScale);
+        return Objects.hash(mapIdSet, waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale);
     }
 
     @Override
     public String toString() {
-        return "AtlasContents{mapIds=" + mapIdSet + ", waypoints=" + waypoints.size() + ", selectedScale=" + selectedScale + "}";
+        return "AtlasContents{mapIds=" + mapIdSet + ", waypoints=" + waypoints.size() + ", blankMaps=" + blankMapCount + ", selectedScale=" + selectedScale + "}";
     }
 }

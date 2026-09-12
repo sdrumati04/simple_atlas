@@ -46,6 +46,7 @@
   "message.simple_atlas.waypoint_added": "Waypoint added: %s",
   "message.simple_atlas.waypoint_limit_reached": "Atlas waypoint limit reached (%s)",
   "screen.simple_atlas.atlas.title": "Atlas",
+  "tooltip.simple_atlas.blank_maps": "Empty maps: %s",
   "tooltip.simple_atlas.no_maps": "No maps inserted",
   "tooltip.simple_atlas.scale": "Scale: (1:%s)",
   "tooltip.simple_atlas.scales": "Scales: %s"

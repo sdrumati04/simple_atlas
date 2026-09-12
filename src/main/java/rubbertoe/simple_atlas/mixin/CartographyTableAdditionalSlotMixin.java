@@ -13,7 +13,7 @@ public abstract class CartographyTableAdditionalSlotMixin {
 
     @Inject(method = "mayPlace", at = @At("HEAD"), cancellable = true)
     private void simple_atlas$allowAtlas(ItemStack itemStack, CallbackInfoReturnable<Boolean> cir) {
-        if (itemStack.is(ModItems.ATLAS) || itemStack.is(Items.BOOK) || itemStack.is(Items.FILLED_MAP) || itemStack.is(Items.SHEARS) || itemStack.is(Items.PAPER)) {
+        if (itemStack.is(ModItems.ATLAS) || itemStack.is(Items.BOOK) || itemStack.is(Items.FILLED_MAP) || itemStack.is(Items.SHEARS) || itemStack.is(Items.PAPER) || rubbertoe.simple_atlas.compat.MapModCompat.isEmptyMap(itemStack)) {
             cir.setReturnValue(true);
         }
     }
