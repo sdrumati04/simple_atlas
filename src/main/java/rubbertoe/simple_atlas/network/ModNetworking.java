@@ -96,7 +96,7 @@ public final class ModNetworking {
                                 payload.selectedScale()
                         );
                         if (currentMapRawId != null) {
-                            atlasStack.set(DataComponents.MAP_ID, new MapId(currentMapRawId));
+                            rubbertoe.simple_atlas.item.AtlasItem.setHeldMapId(atlasStack, new MapId(currentMapRawId));
                         } else {
                             atlasStack.remove(DataComponents.MAP_ID);
                         }
@@ -398,7 +398,8 @@ public final class ModNetworking {
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
                 contents.blankMapCount(),
-                contents.selectedScale()
+                contents.selectedScale(),
+                contents.paperCount()
         );
     }
 

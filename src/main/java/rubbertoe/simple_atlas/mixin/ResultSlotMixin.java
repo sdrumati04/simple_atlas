@@ -4,6 +4,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.CraftingContainer;
 import net.minecraft.world.inventory.ResultSlot;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -29,11 +30,11 @@ public abstract class ResultSlotMixin {
     private Player player;
 
     @Unique
-    private final List<Integer> simple_atlas$emptyMapSlotsToClear = new ArrayList<>();
+    private final List<Integer> simple_atlas$slotsToClear = new ArrayList<>();
 
     @Inject(method = "onTake", at = @At("HEAD"))
     private void simple_atlas$beforeTake(Player player, ItemStack stack, CallbackInfo ci) {
-        simple_atlas$emptyMapSlotsToClear.clear();
+        simple_atlas$slotsToClear.clear();
 
         boolean hasAtlasInput = false;
 
@@ -41,25 +42,25 @@ public abstract class ResultSlotMixin {
             ItemStack item = this.craftSlots.getItem(i);
             if (item.is(ModItems.ATLAS)) {
                 hasAtlasInput = true;
-            } else if (MapModCompat.isEmptyMap(item)) {
-                simple_atlas$emptyMapSlotsToClear.add(i);
+            } else if (MapModCompat.isEmptyMap(item) || item.is(Items.PAPER)) {
+                simple_atlas$slotsToClear.add(i);
             }
         }
 
         if (!hasAtlasInput) {
-            simple_atlas$emptyMapSlotsToClear.clear();
+            simple_atlas$slotsToClear.clear();
         }
     }
 
     @Inject(method = "onTake", at = @At("TAIL"))
     private void simple_atlas$afterTake(Player player, ItemStack stack, CallbackInfo ci) {
-        if (!simple_atlas$emptyMapSlotsToClear.isEmpty()) {
-            int clearedCount = simple_atlas$emptyMapSlotsToClear.size();
-            for (int slotIndex : simple_atlas$emptyMapSlotsToClear) {
+        if (!simple_atlas$slotsToClear.isEmpty()) {
+            int clearedCount = simple_atlas$slotsToClear.size();
+            for (int slotIndex : simple_atlas$slotsToClear) {
                 this.craftSlots.setItem(slotIndex, ItemStack.EMPTY);
             }
-            simple_atlas$emptyMapSlotsToClear.clear();
-            SimpleAtlas.LOGGER.info("Consumed full empty map stack(s) across {} slot(s) for AtlasAddRecipe", clearedCount);
+            simple_atlas$slotsToClear.clear();
+            SimpleAtlas.LOGGER.info("Consumed full empty map/paper stack(s) across {} slot(s) for AtlasAddRecipe", clearedCount);
         }
     }
 }

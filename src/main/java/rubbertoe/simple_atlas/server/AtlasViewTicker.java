@@ -27,9 +27,10 @@ public final class AtlasViewTicker {
 
     public static void initialize() {
         ServerTickEvents.END_SERVER_TICK.register(AtlasViewTicker::tick);
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, _) ->
-                AtlasViewManager.stopViewing(handler.player)
-        );
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, _) -> {
+            AtlasViewManager.stopViewing(handler.player);
+            AtlasItem.onPlayerDisconnect(handler.player.getUUID());
+        });
     }
 
     private static void tick(MinecraftServer server) {

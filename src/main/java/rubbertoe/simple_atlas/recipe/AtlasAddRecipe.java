@@ -34,6 +34,7 @@ public class AtlasAddRecipe extends CustomRecipe {
     public boolean matches(CraftingInput input, Level level) {
         ItemStack atlasStack = ItemStack.EMPTY;
         int emptyMapSlots = 0;
+        int paperSlots = 0;
         List<MapId> filledMapIds = new ArrayList<>();
 
         for (int i = 0; i < input.size(); i++) {
@@ -49,6 +50,8 @@ public class AtlasAddRecipe extends CustomRecipe {
                 atlasStack = stack;
             } else if (MapModCompat.isEmptyMap(stack)) {
                 emptyMapSlots++;
+            } else if (stack.is(Items.PAPER)) {
+                paperSlots++;
             } else if (stack.is(Items.FILLED_MAP)) {
                 MapId mapId = stack.get(DataComponents.MAP_ID);
                 if (mapId == null) {
@@ -64,8 +67,8 @@ public class AtlasAddRecipe extends CustomRecipe {
             return false;
         }
 
-        if (emptyMapSlots == 0 && filledMapIds.isEmpty()) {
-            return false; // Need at least 1 map to add
+        if (emptyMapSlots == 0 && filledMapIds.isEmpty() && paperSlots == 0) {
+            return false; // Need at least 1 map or paper to add
         }
 
         AtlasContents contents = atlasStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
@@ -88,6 +91,7 @@ public class AtlasAddRecipe extends CustomRecipe {
     public @NonNull ItemStack assemble(CraftingInput input) {
         ItemStack atlasStack = ItemStack.EMPTY;
         int emptyMapsCount = 0;
+        int paperCount = 0;
         List<MapId> filledMapIds = new ArrayList<>();
 
         for (int i = 0; i < input.size(); i++) {
@@ -100,6 +104,8 @@ public class AtlasAddRecipe extends CustomRecipe {
                 atlasStack = stack;
             } else if (MapModCompat.isEmptyMap(stack)) {
                 emptyMapsCount += stack.getCount();
+            } else if (stack.is(Items.PAPER)) {
+                paperCount += stack.getCount();
             } else if (stack.is(Items.FILLED_MAP)) {
                 MapId mapId = stack.get(DataComponents.MAP_ID);
                 if (mapId != null) {
@@ -115,7 +121,9 @@ public class AtlasAddRecipe extends CustomRecipe {
         ItemStack result = atlasStack.copyWithCount(1);
         AtlasContents contents = result.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
-        AtlasContents updated = contents.withAddedBlankMaps(emptyMapsCount);
+        AtlasContents updated = contents
+                .withAddedBlankMaps(emptyMapsCount)
+                .withAddedPaper(paperCount);
         for (MapId id : filledMapIds) {
             updated = updated.withAdded(id.id());
         }

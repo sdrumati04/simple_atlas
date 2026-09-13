@@ -43,6 +43,10 @@ public final class SimpleAtlasConfigManager {
         return config.playerIconSize;
     }
 
+    public static boolean isConsumePaperForHigherScales() {
+        return config.consumePaperForHigherScales;
+    }
+
     public static void load() {
         if (Files.notExists(CONFIG_PATH)) {
             config = sanitize(new SimpleAtlasConfig());

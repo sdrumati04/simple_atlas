@@ -13,7 +13,7 @@ import java.util.SequencedSet;
 
 public final class AtlasContents {
     public static final int HARD_MAX_ATLAS_MAP_COUNT = SimpleAtlasConfig.MAX_ATLAS_MAP_COUNT;
-    public static final AtlasContents EMPTY = new AtlasContents(List.of(), List.of(), 0, 1, 0, -1);
+    public static final AtlasContents EMPTY = new AtlasContents(List.of(), List.of(), 0, 1, 0, -1, 0, false);
     public static final String DEFAULT_DIMENSION = "minecraft:overworld";
 
     private static final int MAX_WAYPOINT_NAME_LENGTH = 32;
@@ -54,9 +54,13 @@ public final class AtlasContents {
                             .optionalFieldOf("sub_map_ids", List.of())
                             .forGetter(_ -> List.of()),
                     Codec.INT.optionalFieldOf("selected_scale", -1)
-                            .forGetter(AtlasContents::selectedScale)
-            ).apply(instance, (mapIds, waypoints, selectedIcon, nextNum, blankCount, _legacySubMaps, selectedScale) ->
-                    new AtlasContents(mapIds, waypoints, selectedIcon, nextNum, blankCount, selectedScale)
+                            .forGetter(AtlasContents::selectedScale),
+                    Codec.INT.optionalFieldOf("paper_count", 0)
+                            .forGetter(AtlasContents::paperCount),
+                    Codec.BOOL.optionalFieldOf("transcribing", false)
+                            .forGetter(AtlasContents::transcribing)
+            ).apply(instance, (mapIds, waypoints, selectedIcon, nextNum, blankCount, _legacySubMaps, selectedScale, paperCount, transcribing) ->
+                    new AtlasContents(mapIds, waypoints, selectedIcon, nextNum, blankCount, selectedScale, paperCount, transcribing)
             )
     );
 
@@ -67,6 +71,8 @@ public final class AtlasContents {
     private final int nextWaypointNumber;
     private final int blankMapCount;
     private final int selectedScale;
+    private final int paperCount;
+    private final boolean transcribing;
 
     public AtlasContents(
             List<Integer> mapIds,
@@ -76,12 +82,39 @@ public final class AtlasContents {
             int blankMapCount,
             int selectedScale
     ) {
+        this(mapIds, waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, 0, false);
+    }
+
+    public AtlasContents(
+            List<Integer> mapIds,
+            List<WaypointData> waypoints,
+            int selectedWaypointIconIndex,
+            int nextWaypointNumber,
+            int blankMapCount,
+            int selectedScale,
+            int paperCount
+    ) {
+        this(mapIds, waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, paperCount, false);
+    }
+
+    public AtlasContents(
+            List<Integer> mapIds,
+            List<WaypointData> waypoints,
+            int selectedWaypointIconIndex,
+            int nextWaypointNumber,
+            int blankMapCount,
+            int selectedScale,
+            int paperCount,
+            boolean transcribing
+    ) {
         this.mapIdSet = cappedMapIdSet(mapIds);
         this.waypoints = List.copyOf(waypoints);
         this.selectedWaypointIconIndex = Math.max(0, selectedWaypointIconIndex);
         this.nextWaypointNumber = Math.max(1, nextWaypointNumber);
         this.blankMapCount = Math.max(0, blankMapCount);
         this.selectedScale = selectedScale;
+        this.paperCount = Math.max(0, paperCount);
+        this.transcribing = transcribing;
     }
 
     /** Returns map IDs in insertion order. */
@@ -115,6 +148,14 @@ public final class AtlasContents {
         return blankMapCount;
     }
 
+    public int paperCount() {
+        return paperCount;
+    }
+
+    public boolean transcribing() {
+        return transcribing;
+    }
+
     public int selectedScale() {
         return selectedScale;
     }
@@ -127,7 +168,14 @@ public final class AtlasContents {
         if (this.selectedScale == scale) {
             return this;
         }
-        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, scale);
+        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, scale, paperCount, transcribing);
+    }
+
+    public AtlasContents withTranscribing(boolean transcribing) {
+        if (this.transcribing == transcribing) {
+            return this;
+        }
+        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, paperCount, transcribing);
     }
 
     public AtlasContents withAdded(int mapId) {
@@ -137,7 +185,7 @@ public final class AtlasContents {
 
         LinkedHashSet<Integer> updated = new LinkedHashSet<>(mapIdSet);
         updated.add(mapId);
-        return new AtlasContents(List.copyOf(updated), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale);
+        return new AtlasContents(List.copyOf(updated), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, paperCount, transcribing);
     }
 
     public AtlasContents withAddedAll(java.util.Collection<Integer> newMapIds) {
@@ -153,7 +201,7 @@ public final class AtlasContents {
             }
             updated.add(id);
         }
-        return new AtlasContents(List.copyOf(updated), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale);
+        return new AtlasContents(List.copyOf(updated), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, paperCount, transcribing);
     }
 
     public AtlasContents withRemoved(int mapId) {
@@ -163,11 +211,11 @@ public final class AtlasContents {
 
         LinkedHashSet<Integer> updated = new LinkedHashSet<>(mapIdSet);
         updated.remove(mapId);
-        return new AtlasContents(List.copyOf(updated), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale);
+        return new AtlasContents(List.copyOf(updated), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, paperCount, transcribing);
     }
 
     public AtlasContents withWaypointState(List<WaypointData> waypoints, int selectedWaypointIconIndex, int nextWaypointNumber) {
-        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale);
+        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, paperCount, transcribing);
     }
 
     public AtlasContents withBlankMapCount(int count) {
@@ -175,7 +223,7 @@ public final class AtlasContents {
         if (this.blankMapCount == sanitized) {
             return this;
         }
-        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, sanitized, selectedScale);
+        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, sanitized, selectedScale, paperCount, transcribing);
     }
 
     public AtlasContents withAddedBlankMaps(int amount) {
@@ -190,6 +238,21 @@ public final class AtlasContents {
             return this;
         }
         return withBlankMapCount(this.blankMapCount - 1);
+    }
+
+    public AtlasContents withPaperCount(int count) {
+        int sanitized = Math.max(0, count);
+        if (this.paperCount == sanitized) {
+            return this;
+        }
+        return new AtlasContents(mapIds(), waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, sanitized, transcribing);
+    }
+
+    public AtlasContents withAddedPaper(int amount) {
+        if (amount <= 0) {
+            return this;
+        }
+        return withPaperCount(this.paperCount + amount);
     }
 
     public boolean canAddMapId() {
@@ -255,16 +318,18 @@ public final class AtlasContents {
                 && selectedWaypointIconIndex == other.selectedWaypointIconIndex
                 && nextWaypointNumber == other.nextWaypointNumber
                 && blankMapCount == other.blankMapCount
-                && selectedScale == other.selectedScale;
+                && selectedScale == other.selectedScale
+                && paperCount == other.paperCount
+                && transcribing == other.transcribing;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(mapIdSet, waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale);
+        return Objects.hash(mapIdSet, waypoints, selectedWaypointIconIndex, nextWaypointNumber, blankMapCount, selectedScale, paperCount, transcribing);
     }
 
     @Override
     public String toString() {
-        return "AtlasContents{mapIds=" + mapIdSet + ", waypoints=" + waypoints.size() + ", blankMaps=" + blankMapCount + ", selectedScale=" + selectedScale + "}";
+        return "AtlasContents{mapIds=" + mapIdSet + ", waypoints=" + waypoints.size() + ", blankMaps=" + blankMapCount + ", paper=" + paperCount + ", selectedScale=" + selectedScale + ", transcribing=" + transcribing + "}";
     }
 }

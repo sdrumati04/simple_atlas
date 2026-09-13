@@ -14,12 +14,14 @@ public final class SimpleAtlasConfig {
     public static final double MAX_ICON_SIZE = 2.0;
     public static final double DEFAULT_WAYPOINT_ICON_SIZE = 1.0;
     public static final double DEFAULT_PLAYER_ICON_SIZE = 1.0;
+    public static final boolean DEFAULT_CONSUME_PAPER_FOR_HIGHER_SCALES = true;
 
     public int maxAtlasMapCount = DEFAULT_MAX_ATLAS_MAP_COUNT;
     public int maxWaypoints = DEFAULT_MAX_WAYPOINT_COUNT;
     public boolean bannerWaypointsOnly = DEFAULT_BANNER_WAYPOINTS_ONLY;
     public double waypointIconSize = DEFAULT_WAYPOINT_ICON_SIZE;
     public double playerIconSize = DEFAULT_PLAYER_ICON_SIZE;
+    public boolean consumePaperForHigherScales = DEFAULT_CONSUME_PAPER_FOR_HIGHER_SCALES;
 
     public static int clampMaxAtlasMapCount(int value) {
         return Math.clamp(value, MIN_ATLAS_MAP_COUNT, MAX_ATLAS_MAP_COUNT);

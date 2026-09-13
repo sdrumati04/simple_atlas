@@ -30,6 +30,9 @@ public final class AtlasCartographyTakeHandler {
             boolean isEmptyMapAdd,
             int emptyMapSlotIndex,
             int emptyMapCountToConsume,
+            boolean isPaperAdd,
+            int paperSlotIndex,
+            int paperCountToConsume,
             AtlasCartographyActionTrigger.Action cartographyAction
     ) {}
 
@@ -39,8 +42,22 @@ public final class AtlasCartographyTakeHandler {
 
         boolean bookDuplication = (slot0.is(Items.BOOK) && slot1.is(ModItems.ATLAS))
                 || (slot0.is(ModItems.ATLAS) && slot1.is(Items.BOOK));
-        boolean atlasScale = (slot0.is(ModItems.ATLAS) && slot1.is(Items.PAPER))
+        boolean hasPaperAndAtlas = (slot0.is(ModItems.ATLAS) && slot1.is(Items.PAPER))
                 || (slot0.is(Items.PAPER) && slot1.is(ModItems.ATLAS));
+        ItemStack atlasForPaper = hasPaperAndAtlas
+                ? (slot0.is(ModItems.ATLAS) ? slot0 : slot1)
+                : ItemStack.EMPTY;
+        AtlasContents paperAtlasContents = atlasForPaper.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+        boolean atlasScale = hasPaperAndAtlas && !paperAtlasContents.mapIds().isEmpty();
+        boolean paperAdd = hasPaperAndAtlas && paperAtlasContents.mapIds().isEmpty();
+
+        int paperSlotIndex = -1;
+        int paperCountToConsume = 0;
+        if (paperAdd) {
+            paperSlotIndex = slot0.is(Items.PAPER) ? 0 : 1;
+            paperCountToConsume = container.getItem(paperSlotIndex).getCount();
+        }
+
         boolean atlasDownscale = (slot0.is(ModItems.ATLAS) && slot1.is(Items.SHEARS))
                 || (slot0.is(Items.SHEARS) && slot1.is(ModItems.ATLAS));
         boolean emptyMapAdd = (MapModCompat.isEmptyMap(slot0) && slot1.is(ModItems.ATLAS))
@@ -90,11 +107,18 @@ public final class AtlasCartographyTakeHandler {
                 emptyMapAdd,
                 emptyMapSlotIndex,
                 emptyMapCountToConsume,
+                paperAdd,
+                paperSlotIndex,
+                paperCountToConsume,
                 action
         );
     }
 
     public static void scaleOrDownscaleAtlas(ServerLevel level, ItemStack slot0, ItemStack slot1, ItemStack atlasResult) {
+        scaleOrDownscaleAtlas(level, slot0, slot1, atlasResult, null);
+    }
+
+    public static void scaleOrDownscaleAtlas(ServerLevel level, ItemStack slot0, ItemStack slot1, ItemStack atlasResult, @org.jetbrains.annotations.Nullable ServerPlayer player) {
         if (!atlasResult.is(ModItems.ATLAS)) {
             return;
         }
@@ -116,7 +140,7 @@ public final class AtlasCartographyTakeHandler {
         if (isDownscale) {
             ItemStack atlasInput = slot0.is(ModItems.ATLAS) ? slot0 : slot1;
             AtlasContents original = atlasInput.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
-            AtlasContents downscaled = AtlasCartographyScaler.downscaleAtlas(level, original);
+            AtlasContents downscaled = AtlasCartographyScaler.downscaleAtlas(level, original, player);
             if (downscaled != null) {
                 atlasResult.set(ModComponents.ATLAS_CONTENTS, downscaled);
             }
@@ -138,7 +162,7 @@ public final class AtlasCartographyTakeHandler {
                 }
             } else if (context.isAtlasDownscale() && !context.downscaleAtlasTemplate().isEmpty()) {
                 AtlasContents original = context.downscaleAtlasTemplate().getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
-                AtlasContents downscaled = AtlasCartographyScaler.downscaleAtlas(serverPlayer.level(), original);
+                AtlasContents downscaled = AtlasCartographyScaler.downscaleAtlas(serverPlayer.level(), original, serverPlayer);
                 if (downscaled != null) {
                     carried.set(ModComponents.ATLAS_CONTENTS, downscaled);
                 }
@@ -156,6 +180,11 @@ public final class AtlasCartographyTakeHandler {
         // 3. Empty map consumption: consume remaining stack of empty maps
         if (context.isEmptyMapAdd() && context.emptyMapSlotIndex() >= 0 && context.emptyMapCountToConsume() > 1) {
             container.removeItem(context.emptyMapSlotIndex(), context.emptyMapCountToConsume() - 1);
+        }
+
+        // 3b. Paper consumption: consume remaining stack of paper
+        if (context.isPaperAdd() && context.paperSlotIndex() >= 0 && context.paperCountToConsume() > 1) {
+            container.removeItem(context.paperSlotIndex(), context.paperCountToConsume() - 1);
         }
 
         // 4. Shears durability damage and preservation:

@@ -35,8 +35,8 @@ import java.util.Map;
 import java.util.Optional;
 
 public final class AtlasCartographyScaler {
-    private static final int MAP_SIZE = 128;
-    private static final int MAP_PIXEL_COUNT = MAP_SIZE * MAP_SIZE;
+    public static final int MAP_SIZE = 128;
+    public static final int MAP_PIXEL_COUNT = MAP_SIZE * MAP_SIZE;
 
     private AtlasCartographyScaler() {}
 
@@ -129,7 +129,8 @@ public final class AtlasCartographyScaler {
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
                 contents.blankMapCount(),
-                targetScale + 1
+                targetScale + 1,
+                contents.paperCount()
         );
     }
 
@@ -204,6 +205,10 @@ public final class AtlasCartographyScaler {
     }
 
     public static @Nullable AtlasContents downscaleAtlas(ServerLevel level, AtlasContents contents) {
+        return downscaleAtlas(level, contents, null);
+    }
+
+    public static @Nullable AtlasContents downscaleAtlas(ServerLevel level, AtlasContents contents, @Nullable ServerPlayer player) {
         if (!canDownscaleAtlas(level, contents)) {
             return null;
         }
@@ -220,7 +225,8 @@ public final class AtlasCartographyScaler {
         int parentSpan = 128 * parentScaleFactor;
 
         boolean hasRemapped = MapModCompat.isRemappedLoaded();
-        LinkedHashMap<ScaledMapKey, MapItemSavedData> childMapsByKey = new LinkedHashMap<>();
+        record ChildEntry(MapItemSavedData data, boolean[] coverage, @Nullable ArrayList<Integer> rem, net.minecraft.resources.ResourceKey<Level> dimension) {}
+        LinkedHashMap<ScaledMapKey, ChildEntry> childMapsByKey = new LinkedHashMap<>();
 
         for (int rawId : contents.mapIds()) {
             MapItemSavedData mapData = level.getMapData(new MapId(rawId));
@@ -245,8 +251,12 @@ public final class AtlasCartographyScaler {
                     int childCenterZ = childMinZ + childSpan / 2;
 
                     ScaledMapKey key = new ScaledMapKey(mapData.dimension, childCenterX, childCenterZ, (byte) childScale);
-                    MapItemSavedData childData = childMapsByKey.get(key);
-                    if (childData == null) {
+                    ChildEntry entry = childMapsByKey.get(key);
+                    MapItemSavedData childData;
+                    boolean[] coverageOnChild;
+                    ArrayList<Integer> childRem;
+
+                    if (entry == null) {
                         childData = MapItemSavedData.createFresh(
                                 childCenterX,
                                 childCenterZ,
@@ -255,14 +265,13 @@ public final class AtlasCartographyScaler {
                                 false,
                                 mapData.dimension
                         );
-                        childMapsByKey.put(key, childData);
-                    }
-
-                    boolean[] coverageOnChild = new boolean[MAP_PIXEL_COUNT];
-                    boolean hasChildCoverage = false;
-                    ArrayList<Integer> childRem = hasRemapped ? MapModCompat.getRemappedColors(childData) : null;
-                    if (hasRemapped && childRem == null) {
-                        childRem = new ArrayList<>(Collections.nCopies(MAP_PIXEL_COUNT, 0));
+                        coverageOnChild = new boolean[MAP_PIXEL_COUNT];
+                        childRem = hasRemapped ? new ArrayList<>(Collections.nCopies(MAP_PIXEL_COUNT, 0)) : null;
+                        childMapsByKey.put(key, new ChildEntry(childData, coverageOnChild, childRem, mapData.dimension));
+                    } else {
+                        childData = entry.data();
+                        coverageOnChild = entry.coverage();
+                        childRem = entry.rem();
                     }
 
                     for (int cy = 0; cy < MAP_SIZE; cy++) {
@@ -279,7 +288,6 @@ public final class AtlasCartographyScaler {
                                 if (parentColor != 0) {
                                     int childIdx = cx + cy * MAP_SIZE;
                                     coverageOnChild[childIdx] = true;
-                                    hasChildCoverage = true;
                                     childData.setColor(cx, cy, parentColor);
                                     if (hasRemapped && parentRem != null && parentIdx < parentRem.size() && childRem != null) {
                                         int remVal = parentRem.get(parentIdx);
@@ -291,18 +299,6 @@ public final class AtlasCartographyScaler {
                             }
                         }
                     }
-
-                    if (hasChildCoverage) {
-                        ServerLevel mapLevel = level.getServer().getLevel(mapData.dimension);
-                        if (mapLevel == null) {
-                            mapLevel = level;
-                        }
-                        scanWorldBlocksForScaledMap(mapLevel, childData, coverageOnChild, childRem);
-                    }
-
-                    if (childRem != null) {
-                        MapModCompat.setRemappedColors(childData, childRem);
-                    }
                 }
             }
         }
@@ -313,12 +309,30 @@ public final class AtlasCartographyScaler {
 
         int maxMaps = SimpleAtlasConfigManager.getMaxAtlasMapCount();
         LinkedHashSet<Integer> newMapIds = new LinkedHashSet<>();
+        List<AtlasTranscriptionManager.MapScanTask> scanTasks = new ArrayList<>();
 
-        for (MapItemSavedData childData : childMapsByKey.values()) {
+        for (ChildEntry entry : childMapsByKey.values()) {
+            MapItemSavedData childData = entry.data();
+            if (entry.rem() != null) {
+                MapModCompat.setRemappedColors(childData, entry.rem());
+            }
+
             MapId newId = level.getFreeMapId();
             level.setMapData(newId, childData);
             childData.setDirty();
             newMapIds.add(newId.id());
+
+            ServerLevel mapLevel = level.getServer().getLevel(entry.dimension());
+            if (mapLevel == null) {
+                mapLevel = level;
+            }
+            scanTasks.add(new AtlasTranscriptionManager.MapScanTask(
+                    mapLevel,
+                    newId,
+                    childData,
+                    entry.coverage(),
+                    entry.rem()
+            ));
         }
 
         LinkedHashSet<Integer> resultingIds = new LinkedHashSet<>();
@@ -334,17 +348,24 @@ public final class AtlasCartographyScaler {
             return null;
         }
 
+        boolean hasScanTasks = !scanTasks.isEmpty();
+        if (hasScanTasks) {
+            AtlasTranscriptionManager.startJob(player, newMapIds, scanTasks);
+        }
+
         return new AtlasContents(
                 List.copyOf(resultingIds),
                 contents.waypoints(),
                 contents.selectedWaypointIconIndex(),
                 contents.nextWaypointNumber(),
                 contents.blankMapCount(),
-                childScale
+                childScale,
+                contents.paperCount(),
+                hasScanTasks
         );
     }
 
-    private static void sendMapSyncPacket(ServerPlayer player, MapId mapId, MapItemSavedData mapData) {
+    public static void sendMapSyncPacket(ServerPlayer player, MapId mapId, MapItemSavedData mapData) {
         mapData.getHoldingPlayer(player);
         List<MapDecoration> currentDecorations = new ArrayList<>();
         mapData.getDecorations().forEach(currentDecorations::add);
@@ -537,177 +558,188 @@ public final class AtlasCartographyScaler {
             boolean[] projectedCoverage,
             @Nullable ArrayList<Integer> targetRem
     ) {
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        BlockPos.MutableBlockPos fluidPos = new BlockPos.MutableBlockPos();
+        for (int x = 0; x < MAP_SIZE; ++x) {
+            scanColumnForScaledMap(level, target, projectedCoverage, targetRem, x, pos, fluidPos);
+        }
+    }
+
+    public static void scanColumnForScaledMap(
+            ServerLevel level,
+            MapItemSavedData target,
+            boolean[] projectedCoverage,
+            @Nullable ArrayList<Integer> targetRem,
+            int x,
+            BlockPos.MutableBlockPos pos,
+            BlockPos.MutableBlockPos fluidPos
+    ) {
         int scaleFactor = 1 << target.scale;
         int centerX = target.centerX;
         int centerZ = target.centerZ;
         boolean hasCeiling = level.dimensionType().hasCeiling();
         boolean useRemapped = MapModCompat.isRemappedLoaded();
 
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        BlockPos.MutableBlockPos fluidPos = new BlockPos.MutableBlockPos();
-
         int lastChunkX = Integer.MIN_VALUE;
         int lastChunkZ = Integer.MIN_VALUE;
         LevelChunk cachedChunk = null;
 
-        for (int x = 0; x < MAP_SIZE; ++x) {
-            double d0 = 0.0D;
+        double d0 = 0.0D;
 
-            for (int y = -1; y < MAP_SIZE; ++y) {
-                boolean isExplored = y >= 0 && projectedCoverage[x + y * MAP_SIZE];
-                boolean nextIsExplored = y < MAP_SIZE - 1 && projectedCoverage[x + (y + 1) * MAP_SIZE];
+        for (int y = -1; y < MAP_SIZE; ++y) {
+            boolean isExplored = y >= 0 && projectedCoverage[x + y * MAP_SIZE];
+            boolean nextIsExplored = y < MAP_SIZE - 1 && projectedCoverage[x + (y + 1) * MAP_SIZE];
 
-                if (!isExplored && !nextIsExplored) {
-                    d0 = 0.0D;
-                    continue;
-                }
+            if (!isExplored && !nextIsExplored) {
+                d0 = 0.0D;
+                continue;
+            }
 
-                int startBlockX = (centerX / scaleFactor + x - 64) * scaleFactor;
-                int startBlockZ = (centerZ / scaleFactor + y - 64) * scaleFactor;
+            int startBlockX = (centerX / scaleFactor + x - 64) * scaleFactor;
+            int startBlockZ = (centerZ / scaleFactor + y - 64) * scaleFactor;
 
-                int chunkX = SectionPos.blockToSectionCoord(startBlockX);
-                int chunkZ = SectionPos.blockToSectionCoord(startBlockZ);
-                if (cachedChunk == null || lastChunkX != chunkX || lastChunkZ != chunkZ) {
-                    lastChunkX = chunkX;
-                    lastChunkZ = chunkZ;
-                    cachedChunk = level.getChunk(chunkX, chunkZ);
-                }
+            int chunkX = SectionPos.blockToSectionCoord(startBlockX);
+            int chunkZ = SectionPos.blockToSectionCoord(startBlockZ);
+            if (cachedChunk == null || lastChunkX != chunkX || lastChunkZ != chunkZ) {
+                lastChunkX = chunkX;
+                lastChunkZ = chunkZ;
+                cachedChunk = level.getChunk(chunkX, chunkZ);
+            }
 
-                if (cachedChunk == null || cachedChunk.isEmpty()) {
-                    d0 = 0.0D;
-                    continue;
-                }
+            if (cachedChunk == null || cachedChunk.isEmpty()) {
+                d0 = 0.0D;
+                continue;
+            }
 
-                int fluidDepthSum = 0;
-                double sumY = 0.0D;
-                Multiset<MapColor> vanillaCounts = LinkedHashMultiset.create();
-                Multiset<Object> remappedCounts = useRemapped ? LinkedHashMultiset.create() : null;
+            int fluidDepthSum = 0;
+            double sumY = 0.0D;
+            Multiset<MapColor> vanillaCounts = LinkedHashMultiset.create();
+            Multiset<Object> remappedCounts = useRemapped ? LinkedHashMultiset.create() : null;
 
-                if (hasCeiling) {
-                    int k = startBlockX + startBlockZ * 231871;
-                    k = k * k * 31287121 + k * 11;
-                    if ((k >> 20 & 1) == 0) {
-                        vanillaCounts.add(Blocks.DIRT.defaultBlockState().getMapColor(level, BlockPos.ZERO), 10);
-                        if (useRemapped) {
-                            Object dirtDuck = MapModCompat.getRemappedDirt(level);
-                            if (dirtDuck != null) {
-                                remappedCounts.add(dirtDuck, 10);
-                            }
-                        }
-                    } else {
-                        vanillaCounts.add(Blocks.STONE.defaultBlockState().getMapColor(level, BlockPos.ZERO), 100);
-                        if (useRemapped) {
-                            Object stoneDuck = MapModCompat.getRemappedStone(level);
-                            if (stoneDuck != null) {
-                                remappedCounts.add(stoneDuck, 100);
-                            }
+            if (hasCeiling) {
+                int k = startBlockX + startBlockZ * 231871;
+                k = k * k * 31287121 + k * 11;
+                if ((k >> 20 & 1) == 0) {
+                    vanillaCounts.add(Blocks.DIRT.defaultBlockState().getMapColor(level, BlockPos.ZERO), 10);
+                    if (useRemapped) {
+                        Object dirtDuck = MapModCompat.getRemappedDirt(level);
+                        if (dirtDuck != null) {
+                            remappedCounts.add(dirtDuck, 10);
                         }
                     }
-                    sumY = 100.0D;
                 } else {
-                    for (int dx = 0; dx < scaleFactor; ++dx) {
-                        for (int dz = 0; dz < scaleFactor; ++dz) {
-                            int worldX = startBlockX + dx;
-                            int worldZ = startBlockZ + dz;
-                            int bChunkX = SectionPos.blockToSectionCoord(worldX);
-                            int bChunkZ = SectionPos.blockToSectionCoord(worldZ);
-                            if (cachedChunk == null || lastChunkX != bChunkX || lastChunkZ != bChunkZ) {
-                                lastChunkX = bChunkX;
-                                lastChunkZ = bChunkZ;
-                                cachedChunk = level.getChunk(bChunkX, bChunkZ);
-                            }
-                            if (cachedChunk == null || cachedChunk.isEmpty()) {
-                                continue;
-                            }
+                    vanillaCounts.add(Blocks.STONE.defaultBlockState().getMapColor(level, BlockPos.ZERO), 100);
+                    if (useRemapped) {
+                        Object stoneDuck = MapModCompat.getRemappedStone(level);
+                        if (stoneDuck != null) {
+                            remappedCounts.add(stoneDuck, 100);
+                        }
+                    }
+                }
+                sumY = 100.0D;
+            } else {
+                for (int dx = 0; dx < scaleFactor; ++dx) {
+                    for (int dz = 0; dz < scaleFactor; ++dz) {
+                        int worldX = startBlockX + dx;
+                        int worldZ = startBlockZ + dz;
+                        int bChunkX = SectionPos.blockToSectionCoord(worldX);
+                        int bChunkZ = SectionPos.blockToSectionCoord(worldZ);
+                        if (cachedChunk == null || lastChunkX != bChunkX || lastChunkZ != bChunkZ) {
+                            lastChunkX = bChunkX;
+                            lastChunkZ = bChunkZ;
+                            cachedChunk = level.getChunk(bChunkX, bChunkZ);
+                        }
+                        if (cachedChunk == null || cachedChunk.isEmpty()) {
+                            continue;
+                        }
 
-                            pos.set(worldX, 0, worldZ);
-                            int surfaceY = cachedChunk.getHeight(Heightmap.Types.WORLD_SURFACE, pos.getX(), pos.getZ()) + 1;
-                            BlockState state;
-                            if (surfaceY <= level.getMinY()) {
-                                state = Blocks.BEDROCK.defaultBlockState();
-                            } else {
+                        pos.set(worldX, 0, worldZ);
+                        int surfaceY = cachedChunk.getHeight(Heightmap.Types.WORLD_SURFACE, pos.getX(), pos.getZ()) + 1;
+                        BlockState state;
+                        if (surfaceY <= level.getMinY()) {
+                            state = Blocks.BEDROCK.defaultBlockState();
+                        } else {
+                            do {
+                                --surfaceY;
+                                pos.setY(surfaceY);
+                                state = cachedChunk.getBlockState(pos);
+                            } while (isStateInvisible(level, pos, state, useRemapped) && surfaceY > level.getMinY());
+
+                            if (surfaceY > level.getMinY() && !state.getFluidState().isEmpty()) {
+                                int fluidDepth = surfaceY - 1;
+                                fluidPos.set(pos);
+                                BlockState fluidState;
                                 do {
-                                    --surfaceY;
-                                    pos.setY(surfaceY);
-                                    state = cachedChunk.getBlockState(pos);
-                                } while (isStateInvisible(level, pos, state, useRemapped) && surfaceY > level.getMinY());
+                                    fluidPos.setY(fluidDepth--);
+                                    fluidState = cachedChunk.getBlockState(fluidPos);
+                                    fluidDepthSum++;
+                                } while (fluidDepth > level.getMinY() && !fluidState.getFluidState().isEmpty());
 
-                                if (surfaceY > level.getMinY() && !state.getFluidState().isEmpty()) {
-                                    int fluidDepth = surfaceY - 1;
-                                    fluidPos.set(pos);
-                                    BlockState fluidState;
-                                    do {
-                                        fluidPos.setY(fluidDepth--);
-                                        fluidState = cachedChunk.getBlockState(fluidPos);
-                                        fluidDepthSum++;
-                                    } while (fluidDepth > level.getMinY() && !fluidState.getFluidState().isEmpty());
-
-                                    state = getCorrectStateForFluidBlock(level, state, pos);
-                                }
+                                state = getCorrectStateForFluidBlock(level, state, pos);
                             }
+                        }
 
-                            target.checkBanners(level, pos.getX(), pos.getZ());
-                            sumY += (double) surfaceY / (double) (scaleFactor * scaleFactor);
+                        target.checkBanners(level, pos.getX(), pos.getZ());
+                        sumY += (double) surfaceY / (double) (scaleFactor * scaleFactor);
 
-                            vanillaCounts.add(state.getMapColor(level, pos));
-                            if (useRemapped) {
-                                Object matchingDuck = MapModCompat.getMatchingColor(level, pos, state);
-                                if (matchingDuck != null) {
-                                    remappedCounts.add(matchingDuck);
-                                }
+                        vanillaCounts.add(state.getMapColor(level, pos));
+                        if (useRemapped) {
+                            Object matchingDuck = MapModCompat.getMatchingColor(level, pos, state);
+                            if (matchingDuck != null) {
+                                remappedCounts.add(matchingDuck);
                             }
                         }
                     }
                 }
+            }
 
-                fluidDepthSum /= (scaleFactor * scaleFactor);
+            fluidDepthSum /= (scaleFactor * scaleFactor);
 
-                MapColor dominantVanilla = Iterables.getFirst(Multisets.copyHighestCountFirst(vanillaCounts), MapColor.NONE);
+            MapColor dominantVanilla = Iterables.getFirst(Multisets.copyHighestCountFirst(vanillaCounts), MapColor.NONE);
 
-                Object dominantDuck = null;
-                boolean useDithering = false;
-                if (useRemapped && remappedCounts != null) {
-                    dominantDuck = Iterables.getFirst(Multisets.copyHighestCountFirst(remappedCounts), null);
-                    if (dominantDuck != null) {
-                        useDithering = MapModCompat.useDithering(dominantDuck);
-                    }
-                } else if (dominantVanilla == MapColor.WATER) {
-                    useDithering = true;
+            Object dominantDuck = null;
+            boolean useDithering = false;
+            if (useRemapped && remappedCounts != null) {
+                dominantDuck = Iterables.getFirst(Multisets.copyHighestCountFirst(remappedCounts), null);
+                if (dominantDuck != null) {
+                    useDithering = MapModCompat.useDithering(dominantDuck);
                 }
+            } else if (dominantVanilla == MapColor.WATER) {
+                useDithering = true;
+            }
 
-                MapColor.Brightness brightness;
-                if (useDithering) {
-                    double depthDither = (double) fluidDepthSum * 0.1D + (double) (x + y & 1) * 0.2D;
-                    if (depthDither < 0.5D) {
-                        brightness = MapColor.Brightness.HIGH;
-                    } else if (depthDither > 0.9D) {
-                        brightness = MapColor.Brightness.LOW;
-                    } else {
-                        brightness = MapColor.Brightness.NORMAL;
-                    }
+            MapColor.Brightness brightness;
+            if (useDithering) {
+                double depthDither = (double) fluidDepthSum * 0.1D + (double) (x + y & 1) * 0.2D;
+                if (depthDither < 0.5D) {
+                    brightness = MapColor.Brightness.HIGH;
+                } else if (depthDither > 0.9D) {
+                    brightness = MapColor.Brightness.LOW;
                 } else {
-                    double delta = (sumY - d0) * 4.0D / (double) (scaleFactor + 4) + ((double) (x + y & 1) - 0.5D) * 0.4D;
-                    if (delta > 0.6D) {
-                        brightness = MapColor.Brightness.HIGH;
-                    } else if (delta < -0.6D) {
-                        brightness = MapColor.Brightness.LOW;
-                    } else {
-                        brightness = MapColor.Brightness.NORMAL;
-                    }
+                    brightness = MapColor.Brightness.NORMAL;
                 }
+            } else {
+                double delta = (sumY - d0) * 4.0D / (double) (scaleFactor + 4) + ((double) (x + y & 1) - 0.5D) * 0.4D;
+                if (delta > 0.6D) {
+                    brightness = MapColor.Brightness.HIGH;
+                } else if (delta < -0.6D) {
+                    brightness = MapColor.Brightness.LOW;
+                } else {
+                    brightness = MapColor.Brightness.NORMAL;
+                }
+            }
 
-                d0 = sumY;
+            d0 = sumY;
 
-                if (isExplored) {
-                    int targetIndex = x + y * MAP_SIZE;
-                    if (dominantVanilla != null && dominantVanilla != MapColor.NONE) {
-                        target.setColor(x, y, dominantVanilla.getPackedId(brightness));
-                    }
-                    if (useRemapped && dominantDuck != null) {
-                        MapModCompat.putColor(target, x, y, dominantDuck, brightness.id);
-                        if (targetRem != null) {
-                            targetRem.set(targetIndex, MapModCompat.getRemappedColor(target, targetIndex));
-                        }
+            if (isExplored) {
+                int targetIndex = x + y * MAP_SIZE;
+                if (dominantVanilla != null && dominantVanilla != MapColor.NONE) {
+                    target.setColor(x, y, dominantVanilla.getPackedId(brightness));
+                }
+                if (useRemapped && dominantDuck != null) {
+                    MapModCompat.putColor(target, x, y, dominantDuck, brightness.id);
+                    if (targetRem != null) {
+                        targetRem.set(targetIndex, MapModCompat.getRemappedColor(target, targetIndex));
                     }
                 }
             }

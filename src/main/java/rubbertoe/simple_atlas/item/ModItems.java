@@ -12,6 +12,9 @@ import rubbertoe.simple_atlas.SimpleAtlas;
 import rubbertoe.simple_atlas.component.AtlasContents;
 import rubbertoe.simple_atlas.component.ModComponents;
 
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.item.component.TooltipDisplay;
+
 import java.util.function.Function;
 
 public final class ModItems {
@@ -34,6 +37,10 @@ public final class ModItems {
             new Item.Properties()
                     .stacksTo(1)
                     .component(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY)
+                    .component(
+                            DataComponents.TOOLTIP_DISPLAY,
+                            TooltipDisplay.DEFAULT.withHidden(DataComponents.MAP_ID, true)
+                    )
     );
 
     public static void initialize() {

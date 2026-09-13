@@ -32,6 +32,9 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import rubbertoe.simple_atlas.advancement.ModCriteria;
 import rubbertoe.simple_atlas.config.SimpleAtlasConfigManager;
@@ -126,6 +129,13 @@ public class AtlasItem extends Item {
     ) {
         AtlasContents contents = stack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
+        if (contents.transcribing()) {
+            tooltipComponents.accept(
+                    Component.translatable("tooltip.simple_atlas.transcribing")
+                            .withStyle(ChatFormatting.GOLD)
+            );
+        }
+
         if (contents.mapIds().isEmpty()) {
             tooltipComponents.accept(
                     Component.translatable("tooltip.simple_atlas.no_maps")
@@ -161,6 +171,13 @@ public class AtlasItem extends Item {
                             .withStyle(ChatFormatting.GRAY)
             );
         }
+
+        if (contents.paperCount() > 0) {
+            tooltipComponents.accept(
+                    Component.translatable("tooltip.simple_atlas.paper", contents.paperCount())
+                            .withStyle(ChatFormatting.GRAY)
+            );
+        }
     }
 
     @Override
@@ -177,19 +194,54 @@ public class AtlasItem extends Item {
                 AtlasContents.EMPTY
         );
 
+        if (contents.transcribing()) {
+            if (rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.isTranscribing(contents)) {
+                int progress = rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.getProgress(contents);
+                serverLevel.playSound(
+                        null,
+                        player.getX(),
+                        player.getY(),
+                        player.getZ(),
+                        SoundEvents.VILLAGER_WORK_CARTOGRAPHER,
+                        SoundSource.PLAYERS,
+                        0.8f,
+                        1.0f
+                );
+                player.sendOverlayMessage(
+                        Component.translatable("message.simple_atlas.transcribing_progress", progress)
+                );
+                return InteractionResult.SUCCESS;
+            } else {
+                contents = contents.withTranscribing(false);
+                atlasStack.set(ModComponents.ATLAS_CONTENTS, contents);
+            }
+        }
+
         if (contents.mapIds().isEmpty()) {
             if ((contents.blankMapCount() > 0 || player.isCreative()) && contents.canAddMapId()) {
-                Integer firstMapId = autoCreateMap(player, atlasStack, serverLevel, contents);
+                Integer firstMapId = autoCreateMap(player, atlasStack, serverLevel, contents, true);
                 if (firstMapId != null) {
                     contents = atlasStack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                    player.sendOverlayMessage(buildHeldInfoComponent(atlasStack, contents, serverLevel));
+                } else {
+                    return InteractionResult.SUCCESS;
                 }
             }
         }
 
         if (contents.mapIds().isEmpty()) {
-            player.sendSystemMessage(
+            serverLevel.playSound(
+                    null,
+                    player.getX(),
+                    player.getY(),
+                    player.getZ(),
+                    SoundEvents.DISPENSER_FAIL,
+                    SoundSource.PLAYERS,
+                    0.8f,
+                    1.2f
+            );
+            player.sendOverlayMessage(
                     Component.translatable("message.simple_atlas.no_maps_inserted")
-                            .withStyle(ChatFormatting.YELLOW)
             );
             return InteractionResult.SUCCESS;
         }
@@ -209,6 +261,8 @@ public class AtlasItem extends Item {
             return;
         }
 
+        checkAndSendEquipInfo(player, level);
+
         boolean heldInHand = slot == EquipmentSlot.MAINHAND || slot == EquipmentSlot.OFFHAND;
         if (!heldInHand) {
             removeMapIdIfPresent(stack);
@@ -216,6 +270,18 @@ public class AtlasItem extends Item {
         }
 
         AtlasContents contents = stack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+
+        if (contents.transcribing()) {
+            if (rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.isTranscribing(contents)) {
+                if (level.getGameTime() % 20 == 0) {
+                    int progress = rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.getProgress(contents);
+                    player.sendOverlayMessage(Component.translatable("message.simple_atlas.transcribing_progress", progress));
+                }
+            } else {
+                contents = contents.withTranscribing(false);
+                stack.set(ModComponents.ATLAS_CONTENTS, contents);
+            }
+        }
 
         MapId existingId = stack.get(DataComponents.MAP_ID);
         Integer preferredRawId = existingId != null ? existingId.id() : null;
@@ -228,12 +294,17 @@ public class AtlasItem extends Item {
                 contents.selectedScale()
         );
 
+        boolean justAutoCreated = false;
         if (currentMapRawId == null) {
             if ((contents.blankMapCount() > 0 || player.isCreative()) && contents.canAddMapId()) {
-                currentMapRawId = autoCreateMap(player, stack, level, contents);
+                currentMapRawId = autoCreateMap(player, stack, level, contents, false);
                 if (currentMapRawId != null) {
                     contents = stack.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                    LAST_AUTO_EXPAND_WARN_TICK.remove(player.getUUID());
+                    justAutoCreated = true;
                 }
+            } else if (!contents.mapIds().isEmpty()) {
+                triggerAutoExpandFailure(player, level, contents);
             }
         }
 
@@ -244,7 +315,13 @@ public class AtlasItem extends Item {
 
         MapId targetId = new MapId(currentMapRawId);
         if (!targetId.equals(existingId)) {
-            stack.set(DataComponents.MAP_ID, targetId);
+            setHeldMapId(stack, targetId);
+        } else {
+            ensureMapIdTooltipHidden(stack);
+        }
+
+        if (justAutoCreated) {
+            player.sendOverlayMessage(buildHeldInfoComponent(stack, contents, level));
         }
 
         // Mirror vanilla carried-map behavior so the player marker is present on the held atlas map.
@@ -370,7 +447,124 @@ public class AtlasItem extends Item {
         );
     }
 
+    private static final Map<UUID, ItemStack> LAST_HELD_MAIN_STACK = new ConcurrentHashMap<>();
+    private static final Map<UUID, ItemStack> LAST_HELD_OFF_STACK = new ConcurrentHashMap<>();
+    private static final Map<UUID, Long> LAST_AUTO_EXPAND_WARN_TICK = new ConcurrentHashMap<>();
+
+    public static void onPlayerDisconnect(UUID playerId) {
+        LAST_HELD_MAIN_STACK.remove(playerId);
+        LAST_HELD_OFF_STACK.remove(playerId);
+        LAST_AUTO_EXPAND_WARN_TICK.remove(playerId);
+    }
+
+    private static void checkAndSendEquipInfo(Player player, ServerLevel level) {
+        ItemStack currentMain = player.getMainHandItem();
+        ItemStack lastMain = LAST_HELD_MAIN_STACK.get(player.getUUID());
+        if (currentMain != lastMain) {
+            LAST_HELD_MAIN_STACK.put(player.getUUID(), currentMain);
+            if (currentMain.is(ModItems.ATLAS)) {
+                AtlasContents contents = currentMain.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                if (contents.transcribing() && rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.isTranscribing(contents)) {
+                    int progress = rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.getProgress(contents);
+                    player.sendOverlayMessage(Component.translatable("message.simple_atlas.transcribing_progress", progress));
+                } else {
+                    player.sendOverlayMessage(buildHeldInfoComponent(currentMain, contents, level));
+                }
+            }
+        }
+
+        ItemStack currentOff = player.getOffhandItem();
+        ItemStack lastOff = LAST_HELD_OFF_STACK.get(player.getUUID());
+        if (currentOff != lastOff) {
+            LAST_HELD_OFF_STACK.put(player.getUUID(), currentOff);
+            if (currentOff.is(ModItems.ATLAS) && !currentMain.is(ModItems.ATLAS)) {
+                AtlasContents contents = currentOff.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+                if (contents.transcribing() && rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.isTranscribing(contents)) {
+                    int progress = rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.getProgress(contents);
+                    player.sendOverlayMessage(Component.translatable("message.simple_atlas.transcribing_progress", progress));
+                } else {
+                    player.sendOverlayMessage(buildHeldInfoComponent(currentOff, contents, level));
+                }
+            }
+        }
+    }
+
+    public static Component buildHeldInfoComponent(ItemStack stack, AtlasContents contents, ServerLevel level) {
+        net.minecraft.network.chat.MutableComponent comp = Component.empty();
+
+        comp.append(stack.getHoverName().copy().withStyle(ChatFormatting.GOLD));
+
+        comp.append(Component.literal(" (").withStyle(ChatFormatting.DARK_GRAY));
+        if (contents.mapIds().isEmpty()) {
+            comp.append(Component.translatable("message.simple_atlas.info_no_maps").withStyle(ChatFormatting.GRAY));
+        } else {
+            int ratio = 1;
+            if (contents.selectedScale() >= 0) {
+                ratio = 1 << contents.selectedScale();
+            } else {
+                for (int rawId : contents.mapIds()) {
+                    MapItemSavedData data = level.getMapData(new MapId(rawId));
+                    if (data != null) {
+                        ratio = 1 << data.scale;
+                        if (data.dimension.equals(level.dimension())) {
+                            break;
+                        }
+                    }
+                }
+            }
+            comp.append(Component.literal("1:" + ratio).withStyle(ChatFormatting.YELLOW));
+        }
+        comp.append(Component.literal(")").withStyle(ChatFormatting.DARK_GRAY));
+
+        comp.append(Component.literal(" • ").withStyle(ChatFormatting.DARK_GRAY));
+        comp.append(Component.translatable("message.simple_atlas.info_maps", contents.mapIds().size()).withStyle(ChatFormatting.WHITE));
+
+        comp.append(Component.literal(" • ").withStyle(ChatFormatting.DARK_GRAY));
+        ChatFormatting blankColor = contents.blankMapCount() > 0 ? ChatFormatting.GREEN : ChatFormatting.RED;
+        comp.append(Component.translatable("message.simple_atlas.info_empty", contents.blankMapCount()).withStyle(blankColor));
+
+        comp.append(Component.literal(" • ").withStyle(ChatFormatting.DARK_GRAY));
+        ChatFormatting paperColor = contents.paperCount() > 0 ? ChatFormatting.GREEN : ChatFormatting.RED;
+        comp.append(Component.translatable("message.simple_atlas.info_paper", contents.paperCount()).withStyle(paperColor));
+
+        return comp;
+    }
+
+    private static void triggerAutoExpandFailure(Player player, ServerLevel level, AtlasContents contents) {
+        long gameTime = level.getGameTime();
+        Long lastWarn = LAST_AUTO_EXPAND_WARN_TICK.get(player.getUUID());
+        if (lastWarn != null && gameTime - lastWarn < 60 && gameTime >= lastWarn) {
+            return;
+        }
+        LAST_AUTO_EXPAND_WARN_TICK.put(player.getUUID(), gameTime);
+
+        level.playSound(
+                null,
+                player.getX(),
+                player.getY(),
+                player.getZ(),
+                SoundEvents.DISPENSER_FAIL,
+                SoundSource.PLAYERS,
+                0.8f,
+                1.2f
+        );
+
+        if (!contents.canAddMapId()) {
+            player.sendOverlayMessage(
+                    Component.translatable("message.simple_atlas.map_limit_reached", SimpleAtlasConfigManager.getMaxAtlasMapCount())
+            );
+        } else if (contents.blankMapCount() <= 0 && !player.isCreative()) {
+            player.sendOverlayMessage(
+                    Component.translatable("message.simple_atlas.no_empty_maps")
+            );
+        }
+    }
+
     public static @Nullable Integer autoCreateMap(Player player, ItemStack atlasStack, ServerLevel level, AtlasContents contents) {
+        return autoCreateMap(player, atlasStack, level, contents, false);
+    }
+
+    public static @Nullable Integer autoCreateMap(Player player, ItemStack atlasStack, ServerLevel level, AtlasContents contents, boolean isManualUse) {
         if (!contents.canAddMapId()) {
             return null;
         }
@@ -392,6 +586,31 @@ public class AtlasItem extends Item {
             targetScale = 0;
         }
 
+        int requiredPaper = targetScale;
+        if (targetScale > 0 && SimpleAtlasConfigManager.isConsumePaperForHigherScales() && !player.isCreative()) {
+            if (contents.paperCount() < requiredPaper) {
+                long gameTime = level.getGameTime();
+                Long lastWarn = LAST_AUTO_EXPAND_WARN_TICK.get(player.getUUID());
+                if (isManualUse || lastWarn == null || gameTime - lastWarn >= 60 || gameTime < lastWarn) {
+                    LAST_AUTO_EXPAND_WARN_TICK.put(player.getUUID(), gameTime);
+                    level.playSound(
+                            null,
+                            player.getX(),
+                            player.getY(),
+                            player.getZ(),
+                            SoundEvents.DISPENSER_FAIL,
+                            SoundSource.PLAYERS,
+                            0.8f,
+                            1.2f
+                    );
+                    player.sendOverlayMessage(
+                            Component.translatable("message.simple_atlas.not_enough_paper", requiredPaper)
+                    );
+                }
+                return null;
+            }
+        }
+
         int blockX = (int) Math.floor(player.getX());
         int blockZ = (int) Math.floor(player.getZ());
         ItemStack newMapStack = MapItem.create(level, blockX, blockZ, (byte) targetScale, true, false);
@@ -401,14 +620,18 @@ public class AtlasItem extends Item {
         }
 
         int newBlankCount = player.isCreative() ? contents.blankMapCount() : Math.max(0, contents.blankMapCount() - 1);
+        int newPaperCount = (player.isCreative() || targetScale <= 0 || !SimpleAtlasConfigManager.isConsumePaperForHigherScales())
+                ? contents.paperCount()
+                : Math.max(0, contents.paperCount() - requiredPaper);
         AtlasContents updated = contents
                 .withBlankMapCount(newBlankCount)
+                .withPaperCount(newPaperCount)
                 .withAdded(newMapId.id());
         if (contents.selectedScale() < 0) {
             updated = updated.withSelectedScale(targetScale);
         }
         atlasStack.set(ModComponents.ATLAS_CONTENTS, updated);
-        atlasStack.set(DataComponents.MAP_ID, newMapId);
+        setHeldMapId(atlasStack, newMapId);
 
         level.playSound(
                 null,
@@ -429,6 +652,18 @@ public class AtlasItem extends Item {
         }
 
         return newMapId.id();
+    }
+
+    public static void setHeldMapId(ItemStack stack, MapId mapId) {
+        stack.set(DataComponents.MAP_ID, mapId);
+        ensureMapIdTooltipHidden(stack);
+    }
+
+    public static void ensureMapIdTooltipHidden(ItemStack stack) {
+        TooltipDisplay display = stack.getOrDefault(DataComponents.TOOLTIP_DISPLAY, TooltipDisplay.DEFAULT);
+        if (display.shows(DataComponents.MAP_ID)) {
+            stack.set(DataComponents.TOOLTIP_DISPLAY, display.withHidden(DataComponents.MAP_ID, true));
+        }
     }
 
     private static void removeMapIdIfPresent(ItemStack stack) {

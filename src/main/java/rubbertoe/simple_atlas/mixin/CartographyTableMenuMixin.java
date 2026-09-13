@@ -45,12 +45,17 @@ public abstract class CartographyTableMenuMixin {
             ItemStack resultStack,
             CallbackInfo ci
     ) {
-        // ── Book + atlas → duplicate the atlas (costs 1 book) ────────────────
+        // ── Book + atlas → duplicate atlas ───────────────────────────────────
         boolean isBookAndAtlas = (mapStack.is(Items.BOOK) && additionalStack.is(ModItems.ATLAS))
                 || (mapStack.is(ModItems.ATLAS) && additionalStack.is(Items.BOOK));
         if (isBookAndAtlas) {
             ItemStack atlasInput = mapStack.is(ModItems.ATLAS) ? mapStack : additionalStack;
             ItemStack result = atlasInput.copyWithCount(1);
+            AtlasContents originalContents = result.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
+            AtlasContents copyContents = originalContents
+                    .withBlankMapCount(0)
+                    .withPaperCount(0);
+            result.set(ModComponents.ATLAS_CONTENTS, copyContents);
 
             if (!ItemStack.matches(result, resultStack)) {
                 this.resultContainer.setItem(2, result);
@@ -130,24 +135,36 @@ public abstract class CartographyTableMenuMixin {
             return;
         }
 
-        // ── Atlas + paper → scale atlas maps by +1 (replaces lower-scale maps) ─
+        // ── Atlas + paper → scale atlas maps by +1 (or add paper if cannot scale) ─
         boolean isAtlasAndPaper = (mapStack.is(ModItems.ATLAS) && additionalStack.is(Items.PAPER))
                 || (mapStack.is(Items.PAPER) && additionalStack.is(ModItems.ATLAS));
         if (isAtlasAndPaper) {
             ItemStack atlasInput = mapStack.is(ModItems.ATLAS) ? mapStack : additionalStack;
+            ItemStack paperInput = mapStack.is(Items.PAPER) ? mapStack : additionalStack;
             AtlasContents contents = atlasInput.getOrDefault(ModComponents.ATLAS_CONTENTS, AtlasContents.EMPTY);
 
             this.access.execute((level, _) -> {
                 int targetScale = AtlasCartographyScaler.getTargetUpscale(level, contents);
-                if (targetScale < 0) {
-                    simple_atlas$rejectAtlasResult();
-                    return;
-                }
+                if (targetScale >= 0) {
+                    ItemStack result = atlasInput.copyWithCount(1);
+                    result.set(ModComponents.ATLAS_CONTENTS, contents.withSelectedScale(targetScale + 1));
+                    if (!ItemStack.matches(result, resultStack)) {
+                        this.resultContainer.setItem(2, result);
+                    }
+                } else {
+                    int addCount = paperInput.getCount();
+                    if (addCount <= 0) {
+                        simple_atlas$rejectAtlasResult();
+                        return;
+                    }
 
-                ItemStack result = atlasInput.copyWithCount(1);
-                result.set(ModComponents.ATLAS_CONTENTS, contents.withSelectedScale(targetScale + 1));
-                if (!ItemStack.matches(result, resultStack)) {
-                    this.resultContainer.setItem(2, result);
+                    ItemStack result = atlasInput.copyWithCount(1);
+                    AtlasContents updatedContents = contents.withAddedPaper(addCount);
+                    result.set(ModComponents.ATLAS_CONTENTS, updatedContents);
+
+                    if (!ItemStack.matches(result, resultStack)) {
+                        this.resultContainer.setItem(2, result);
+                    }
                 }
             });
 
@@ -250,7 +267,8 @@ public abstract class CartographyTableMenuMixin {
                 selectedIcon,
                 nextWaypointNumber,
                 base.blankMapCount() + incoming.blankMapCount(),
-                selectedScale
+                selectedScale,
+                base.paperCount() + incoming.paperCount()
         );
     }
 
@@ -284,7 +302,7 @@ public abstract class CartographyTableMenuMixin {
 
             ItemStack unscaledCopy = stack.copy();
             if (player instanceof ServerPlayer serverPlayer) {
-                AtlasCartographyTakeHandler.scaleOrDownscaleAtlas(serverPlayer.level(), slot0, slot1, stack);
+                AtlasCartographyTakeHandler.scaleOrDownscaleAtlas(serverPlayer.level(), slot0, slot1, stack, serverPlayer);
             }
 
             // Move to player inventory

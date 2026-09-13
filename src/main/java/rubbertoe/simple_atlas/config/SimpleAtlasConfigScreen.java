@@ -52,6 +52,15 @@ public final class SimpleAtlasConfigScreen {
 
         generalCategory.addEntry(
                 entryBuilder
+                        .startBooleanToggle(Component.translatable("config.simple_atlas.consume_paper_for_higher_scales"), config.consumePaperForHigherScales)
+                        .setTooltip(Component.translatable("config.simple_atlas.consume_paper_for_higher_scales.tooltip"))
+                        .setDefaultValue(SimpleAtlasConfig.DEFAULT_CONSUME_PAPER_FOR_HIGHER_SCALES)
+                        .setSaveConsumer(value -> config.consumePaperForHigherScales = value)
+                        .build()
+        );
+
+        generalCategory.addEntry(
+                entryBuilder
                         .startDoubleField(Component.translatable("config.simple_atlas.waypoint_icon_size"), config.waypointIconSize)
                         .setTooltip(Component.translatable("config.simple_atlas.waypoint_icon_size.tooltip"))
                         .setMin(SimpleAtlasConfig.MIN_ICON_SIZE)

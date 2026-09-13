@@ -26,6 +26,7 @@ public class SimpleAtlas implements ModInitializer {
 		ModCriteria.initialize();
 		ModRecipes.initialize();
 		AtlasViewTicker.initialize();
+		rubbertoe.simple_atlas.cartography.AtlasTranscriptionManager.initialize();
 		LOGGER.info("Simple Atlas initialized.");
 	}
 }

@@ -36,8 +36,19 @@ public class SimpleAtlasLangProvider extends FabricLanguageProvider {
         translationBuilder.add("message.simple_atlas.waypoint_added", "Waypoint added: %s");
         translationBuilder.add("message.simple_atlas.waypoint_limit_reached", "Atlas waypoint limit reached (%s)");
         translationBuilder.add("message.simple_atlas.no_maps_inserted", "Your atlas has no maps inserted");
+        translationBuilder.add("message.simple_atlas.no_empty_maps", "No empty maps to expand map");
+        translationBuilder.add("message.simple_atlas.map_limit_reached", "Atlas map limit reached (%s)");
+        translationBuilder.add("message.simple_atlas.not_enough_paper", "Not enough paper to expand map (requires %s)");
+        translationBuilder.add("message.simple_atlas.transcribing_progress", "🪶 Transcribing atlas maps... (%s%%)");
+        translationBuilder.add("message.simple_atlas.transcription_complete", "🪶 Atlas transcription complete!");
+        translationBuilder.add("message.simple_atlas.info_no_maps", "No maps");
+        translationBuilder.add("message.simple_atlas.info_maps", "Maps: %s");
+        translationBuilder.add("message.simple_atlas.info_empty", "Empty: %s");
+        translationBuilder.add("message.simple_atlas.info_paper", "Paper: %s");
+        translationBuilder.add("tooltip.simple_atlas.transcribing", "🪶 Transcribing...");
         translationBuilder.add("tooltip.simple_atlas.no_maps", "No maps inserted");
         translationBuilder.add("tooltip.simple_atlas.blank_maps", "Empty maps: %s");
+        translationBuilder.add("tooltip.simple_atlas.paper", "Paper: %s");
         translationBuilder.add("tooltip.simple_atlas.scale", "Scale: (1:%s)");
         translationBuilder.add("tooltip.simple_atlas.scales", "Scales: %s");
         translationBuilder.add("gui.simple_atlas.scale_ratio", "Scale 1:%s");
@@ -49,6 +60,8 @@ public class SimpleAtlasLangProvider extends FabricLanguageProvider {
         translationBuilder.add("config.simple_atlas.max_waypoints.tooltip", "Maximum number of waypoints that can be added to an atlas");
         translationBuilder.add("config.simple_atlas.banner_waypoints_only", "Banner waypoints only");
         translationBuilder.add("config.simple_atlas.banner_waypoints_only.tooltip", "When enabled, waypoints can only be created by using the atlas on a banner");
+        translationBuilder.add("config.simple_atlas.consume_paper_for_higher_scales", "Require paper for high-scale mapping");
+        translationBuilder.add("config.simple_atlas.consume_paper_for_higher_scales.tooltip", "When enabled, auto-mapping at scales above 1:1 consumes paper from the atlas reserve (1 paper per scale level)");
         translationBuilder.add("config.simple_atlas.waypoint_icon_size", "Waypoint icon size");
         translationBuilder.add("config.simple_atlas.waypoint_icon_size.tooltip", "Scale factor for waypoint icons (0.5 to 2.0)");
         translationBuilder.add("config.simple_atlas.player_icon_size", "Player icon size");
